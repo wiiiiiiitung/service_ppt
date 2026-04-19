@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>主日崇拜 PPT 產生器</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #0f172a;
+    color: #e2e8f0;
+    min-height: 100vh;
+  }
+
+  header {
+    background: #1e293b;
+    border-bottom: 1px solid #334155;
+    padding: 1.25rem 2rem;
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+  }
+
+  header h1 { font-size: 1.4rem; font-weight: 700; color: #f1f5f9; }
+  header p  { font-size: 0.85rem; color: #94a3b8; }
+
+  .cross { font-size: 1.8rem; }
+
+  main {
+    max-width: 960px;
+    margin: 2rem auto;
+    padding: 0 1.5rem;
+    display: grid;
+    gap: 1.5rem;
+  }
+
+  .card {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 1.5rem;
+  }
+
+  .card h2 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #7dd3fc;
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+  }
+
+  /* Drop zone */
+  .drop-zone {
+    border: 2px dashed #475569;
+    border-radius: 8px;
+    padding: 2.5rem;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    position: relative;
+  }
+  .drop-zone:hover, .drop-zone.drag-over {
+    border-color: #38bdf8;
+    background: #0c4a6e22;
+  }
+  .drop-zone input[type="file"] {
+    position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%;
+  }
+  .drop-zone .icon { font-size: 2.5rem; margin-bottom: 0.75rem; }
+  .drop-zone p { color: #94a3b8; font-size: 0.9rem; }
+  .drop-zone strong { color: #38bdf8; }
+
+  /* File list */
+  #file-list { margin-top: 1rem; display: flex; flex-direction: column; gap: 0.5rem; }
+
+  .file-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    padding: 0.6rem 0.9rem;
+    font-size: 0.85rem;
+  }
+  .file-item .file-icon { font-size: 1.3rem; }
+  .file-item .file-name { flex: 1; color: #e2e8f0; word-break: break-all; }
+  .file-item .file-size { color: #64748b; font-size: 0.75rem; white-space: nowrap; }
+  .file-item .file-source {
+    font-size: 0.7rem;
+    background: #1e3a5f;
+    color: #7dd3fc;
+    border-radius: 4px;
+    padding: 0.1rem 0.4rem;
+  }
+  .file-item button.del {
+    background: none; border: none; color: #ef4444; cursor: pointer; font-size: 1rem; padding: 0.1rem;
+  }
+  .file-item button.del:hover { color: #fca5a5; }
+
+  .badge-pdf  { background: #7f1d1d; color: #fca5a5; }
+  .badge-ppt  { background: #7c2d12; color: #fdba74; }
+  .badge-pptx { background: #7c2d12; color: #fdba74; }
+  .badge-docx { background: #1e3a5f; color: #93c5fd; }
+
+  /* Buttons */
+  .btn {
+    padding: 0.55rem 1.25rem;
+    border-radius: 6px;
+    border: none;
+    font-size: 0.9rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .btn-primary {
+    background: #0369a1;
+    color: white;
+  }
+  .btn-primary:hover { background: #0284c7; }
+  .btn-primary:disabled { background: #334155; color: #64748b; cursor: not-allowed; }
+  .btn-ghost {
+    background: transparent;
+    color: #94a3b8;
+    border: 1px solid #475569;
+  }
+  .btn-ghost:hover { background: #1e293b; color: #e2e8f0; }
+  .btn-success { background: #166534; color: #86efac; }
+  .btn-success:hover { background: #15803d; }
+
+  /* Generate / Status */
+  .generate-row {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+
+  #status-box {
+    display: none;
+    margin-top: 1rem;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 8px;
+    padding: 1rem;
+  }
+  #status-box.visible { display: block; }
+  #status-msg { font-size: 0.85rem; }
+
+  .spinner {
+    display: inline-block;
+    width: 1rem; height: 1rem;
+    border: 2px solid #475569;
+    border-top-color: #38bdf8;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+    vertical-align: middle;
+    margin-right: 0.5rem;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* Summary */
+  #summary { display: none; }
+  #summary.visible { display: block; }
+  .summary-grid {
+    display: grid;
+    gap: 0.4rem;
+    font-size: 0.82rem;
+  }
+  .summary-item {
+    display: flex; gap: 0.5rem; align-items: flex-start;
+    background: #0f172a; border-radius: 6px; padding: 0.4rem 0.7rem;
+  }
+  .summary-item .tag {
+    min-width: 60px; color: #7dd3fc; font-weight: 600;
+  }
+
+  /* Notifications */
+  #toast-container {
+    position: fixed; top: 1rem; right: 1rem;
+    display: flex; flex-direction: column; gap: 0.5rem;
+    z-index: 999;
+  }
+  .toast {
+    background: #1e293b; border: 1px solid #334155;
+    border-radius: 8px; padding: 0.75rem 1rem;
+    font-size: 0.85rem; max-width: 320px;
+    animation: slideIn 0.2s ease;
+  }
+  .toast.success { border-left: 3px solid #22c55e; }
+  .toast.error   { border-left: 3px solid #ef4444; }
+  @keyframes slideIn { from { opacity: 0; transform: translateX(20px); } }
+
+  .type-badge {
+    display: inline-block; font-size: 0.7rem; padding: 0.1rem 0.4rem;
+    border-radius: 4px; margin-right: 0.3rem; font-weight: 600;
+  }
+  .hymn     { background: #4c1d95; color: #c4b5fd; }
+  .prayer   { background: #064e3b; color: #6ee7b7; }
+  .sermon   { background: #7f1d1d; color: #fca5a5; }
+  .anthem   { background: #1e3a5f; color: #93c5fd; }
+  .announce { background: #374151; color: #d1d5db; }
+  .other    { background: #292524; color: #d6d3d1; }
+
+  .warning-box {
+    background: #451a03;
+    border: 1px solid #78350f;
+    border-radius: 6px;
+    padding: 0.6rem 0.9rem;
+    font-size: 0.82rem;
+    color: #fde68a;
+    margin-top: 0.75rem;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="cross">✝</div>
+  <div>
+    <h1>主日崇拜 PPT 產生器</h1>
+    <p>新城歸正教會 · Sunday Worship PPT Generator</p>
+  </div>
+</header>
+
+<main>
+
+  <!-- Step 1: Upload files -->
+  <div class="card">
+    <h2>① 上傳崇拜資料</h2>
+
+    <div class="drop-zone" id="drop-zone">
+      <input type="file" id="file-input" multiple
+             accept=".pdf,.ppt,.pptx,.docx">
+      <div class="icon">📂</div>
+      <p>拖拉檔案到這裡，或 <strong>點擊選擇檔案</strong></p>
+      <p style="margin-top:0.4rem;">支援格式：PDF（程序單）、PPT / PPTX（聖詩）、DOCX（歌詞）</p>
+    </div>
+
+    <div class="warning-box">
+      ⚠️ 舊版 .ppt 格式（二進位）無法直接讀取投影片內容，建議先在 PowerPoint 另存為 .pptx。
+    </div>
+
+    <div id="file-list"></div>
+
+    <div style="margin-top:0.75rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
+      <button class="btn btn-ghost" onclick="clearAll()">清除全部</button>
+    </div>
+  </div>
+
+  <!-- Step 2: Generate -->
+  <div class="card">
+    <h2>② 產生 PowerPoint</h2>
+
+    <div class="generate-row">
+      <button class="btn btn-primary" id="gen-btn" onclick="generate()">
+        🚀 產生 PPT
+      </button>
+      <span id="gen-hint" style="font-size:0.82rem; color:#64748b;">
+        請先上傳 PDF 程序單
+      </span>
+    </div>
+
+    <div id="status-box">
+      <div id="status-msg"></div>
+    </div>
+
+    <div id="summary" style="margin-top:1rem;">
+      <div style="font-size:0.85rem; color:#7dd3fc; margin-bottom:0.5rem; font-weight:600;">解析結果</div>
+      <div class="summary-grid" id="summary-content"></div>
+      <div style="margin-top:1rem;">
+        <button class="btn btn-success" id="dl-btn" onclick="download()">
+          ⬇ 下載 PPTX
+        </button>
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<div id="toast-container"></div>
+
+<script>
+const fileInput = document.getElementById('file-input');
+const dropZone  = document.getElementById('drop-zone');
+let uploadedFiles = {};    // name → {name, size}
+
+// ── Drag & Drop ──────────────────────────────────────────────────────────────
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  uploadFiles(e.dataTransfer.files);
+});
+fileInput.addEventListener('change', () => uploadFiles(fileInput.files));
+
+async function uploadFiles(fileList) {
+  if (!fileList.length) return;
+  const fd = new FormData();
+  for (const f of fileList) fd.append('files', f);
+
+  const res = await fetch('/api/upload', { method: 'POST', body: fd });
+  const data = await res.json();
+  if (data.uploaded) {
+    data.uploaded.forEach(f => {
+      uploadedFiles[f.name] = f;
+    });
+    renderFileList();
+    toast(`上傳了 ${data.uploaded.length} 個檔案`, 'success');
+    checkGenReady();
+  }
+}
+
+function renderFileList() {
+  const el = document.getElementById('file-list');
+  const files = Object.values(uploadedFiles);
+  if (!files.length) { el.innerHTML = ''; return; }
+
+  el.innerHTML = files.map(f => {
+    const ext = f.name.split('.').pop().toLowerCase();
+    const icon = ext === 'pdf' ? '📄' : ext === 'docx' ? '📝' : '📊';
+    return `<div class="file-item">
+      <span class="file-icon">${icon}</span>
+      <span class="file-name badge-${ext}">${f.name}</span>
+      <span class="file-size">${formatSize(f.size)}</span>
+      <button class="del" onclick="deleteFile('${f.name}')">✕</button>
+    </div>`;
+  }).join('');
+}
+
+async function deleteFile(name) {
+  await fetch(`/api/files/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  delete uploadedFiles[name];
+  renderFileList();
+  checkGenReady();
+}
+
+async function clearAll() {
+  await fetch('/api/clear', { method: 'POST' });
+  uploadedFiles = {};
+  renderFileList();
+  checkGenReady();
+}
+
+function checkGenReady() {
+  const hasPdf = Object.keys(uploadedFiles).some(n => n.toLowerCase().endsWith('.pdf'));
+  const btn = document.getElementById('gen-btn');
+  const hint = document.getElementById('gen-hint');
+  btn.disabled = !hasPdf;
+  hint.textContent = hasPdf ? '準備就緒' : '請先上傳 PDF 程序單';
+}
+
+// ── Generate ─────────────────────────────────────────────────────────────────
+async function generate() {
+  const btn = document.getElementById('gen-btn');
+  btn.disabled = true;
+
+  const statusBox = document.getElementById('status-box');
+  const statusMsg = document.getElementById('status-msg');
+  statusBox.classList.add('visible');
+  statusMsg.innerHTML = '<span class="spinner"></span> 解析程序單，產生 PPT 中...';
+
+  document.getElementById('summary').classList.remove('visible');
+
+  try {
+    const res = await fetch('/api/generate', { method: 'POST' });
+    const data = await res.json();
+
+    if (data.error) {
+      statusMsg.innerHTML = `<span style="color:#ef4444;">❌ 錯誤：${data.error}</span>`;
+      if (data.detail) {
+        statusMsg.innerHTML += `<pre style="font-size:0.7rem;color:#94a3b8;margin-top:0.5rem;white-space:pre-wrap;">${data.detail}</pre>`;
+      }
+      toast('產生失敗', 'error');
+    } else {
+      statusMsg.innerHTML = `<span style="color:#22c55e;">✅ 成功產生：${data.filename}</span>`;
+      renderSummary(data.agenda_summary);
+      toast('PPT 產生成功！', 'success');
+    }
+  } catch (err) {
+    statusMsg.innerHTML = `<span style="color:#ef4444;">❌ ${err.message}</span>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderSummary(summary) {
+  const el = document.getElementById('summary-content');
+  const order = summary.worship_order || [];
+
+  const typeLabel = {
+    hymn: '聖詩', doxology: '頌榮', prayer: '祈禱', creed: '信仰告白',
+    responsive: '啟應文', anthem: '獻詩', scripture: '經文', sermon: '證道',
+    offering: '奉獻', announcements: '報告', call_to_worship: '宣召', benediction: '祝禱',
+  };
+  const typeClass = {
+    hymn: 'hymn', doxology: 'hymn', prayer: 'prayer', creed: 'prayer',
+    anthem: 'anthem', sermon: 'sermon', announcements: 'announce',
+  };
+
+  el.innerHTML = [
+    summary.date ? `<div class="summary-item"><span class="tag">日期</span><span>${summary.date}</span></div>` : '',
+    summary.sermon_title ? `<div class="summary-item"><span class="tag">證道</span><span>${summary.sermon_title}</span></div>` : '',
+    ...order.map(i => {
+      const cls = typeClass[i.type] || 'other';
+      const label = typeLabel[i.type] || i.type;
+      const num = i.number ? ` ${i.number}` : '';
+      const title = i.title ? ` ${i.title}` : '';
+      return `<div class="summary-item">
+        <span class="type-badge ${cls}">${label}${num}</span>
+        <span>${title}</span>
+      </div>`;
+    }),
+  ].join('');
+
+  document.getElementById('summary').classList.add('visible');
+}
+
+async function download() {
+  window.location.href = '/api/download';
+}
+
+// ── Utils ─────────────────────────────────────────────────────────────────────
+function formatSize(bytes) {
+  if (!bytes) return '';
+  if (bytes < 1024) return bytes + ' B';
+  if (bytes < 1048576) return (bytes/1024).toFixed(1) + ' KB';
+  return (bytes/1048576).toFixed(1) + ' MB';
+}
+
+function toast(msg, type='success') {
+  const container = document.getElementById('toast-container');
+  const el = document.createElement('div');
+  el.className = `toast ${type}`;
+  el.textContent = msg;
+  container.appendChild(el);
+  setTimeout(() => el.remove(), 3500);
+}
+
+// Init
+checkGenReady();
+</script>
+</body>
+</html>
