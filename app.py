@@ -21,7 +21,8 @@ app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+# Use /tmp for Vercel serverless (read-only filesystem), local uploads/ for development
+UPLOAD_DIR = os.path.join("/tmp", "uploads") if os.environ.get("VERCEL") else os.path.join(BASE_DIR, "uploads")
 # Local fixed intro template (first few pre-worship slides)
 _intro_candidate = os.path.join(BASE_DIR, "template", "intro.pptx")
 INTRO_PATH = _intro_candidate if os.path.exists(_intro_candidate) else None
