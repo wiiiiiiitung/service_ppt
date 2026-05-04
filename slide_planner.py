@@ -33,11 +33,13 @@ def plan_slides(template, libraries, agenda, input_files, skip_intro=False, bibl
 
     # === Fixed pre-worship slides ===
     if not skip_intro:
-        # Intro: logo, welcome, blank, zoom, prepare, opening
-        for key in ["logo", "welcome", "blank", "zoom_info", "prepare", "opening"]:
-            idx = find_slide(template, key)
-            if idx is not None:
-                slides.append({"type": "copy_template", "prs": template, "index": idx})
+        # Intro: copy slides up to (but not including) call_to_worship
+        call_to_worship_idx = find_slide(template, "call_to_worship")
+        if call_to_worship_idx is None:
+            call_to_worship_idx = 6  # fallback
+
+        for i in range(call_to_worship_idx):
+            slides.append({"type": "copy_template", "prs": template, "index": i})
 
     # === Worship order items ===
     for item in order:
@@ -112,13 +114,12 @@ def plan_slides(template, libraries, agenda, input_files, skip_intro=False, bibl
                 slides.append({"type": "blank"})
 
         elif itype == "doxology":
-            dox_slides = _get_hymn_slides(libraries, item, input_files, is_doxology=True)
-            slides.extend(dox_slides)
+            # Skip—handled in closing section below
+            pass
 
         elif itype == "benediction":
-            idx = find_slide(template, "benediction")
-            if idx is not None:
-                slides.append({"type": "copy_template", "prs": template, "index": idx})
+            # Skip—handled in closing section below
+            pass
 
     # === Fixed closing slides ===
     for key in ["doxology", "benediction", "quiet", "website"]:

@@ -7,6 +7,7 @@ No hardcoded formatting — everything drives from the config.
 
 from pptx.util import Inches, Pt, Emu
 from pptx.dml.color import RGBColor
+from pptx.enum.text import PP_PARAGRAPH_ALIGNMENT
 
 from service_config import SLIDE_STYLES
 from styles import (
@@ -26,7 +27,7 @@ def add_placeholder_slide(out_prs, label):
     ).text_frame
     tf.word_wrap = True
     p = tf.paragraphs[0]
-    p.alignment = 2
+    p.alignment = PP_PARAGRAPH_ALIGNMENT.CENTER
     run = p.add_run()
     run.text = f"[{label}]"
     run.font.size = Pt(32)
@@ -47,7 +48,7 @@ def add_anthem_title_slide(out_prs, title):
     tf = tb.text_frame
     tf.word_wrap = False
     p = tf.paragraphs[0]
-    p.alignment = 2  # center
+    p.alignment = PP_PARAGRAPH_ALIGNMENT.CENTER  # center
     run = p.add_run()
     run.text = style.get("text", "獻詩: {title}").format(title=title)
     run.font.name = style.get("font", "標楷體")
@@ -83,12 +84,7 @@ def add_scripture_title_slide(out_prs, item, bible_page=None):
             run = p.add_run()
 
         text = run_cfg.get("text", "")
-        if "{ref}" in text:
-            text = text.format(ref=ref)
-        if "{testament}" in text:
-            text = text.format(testament=testament)
-        if "{page}" in text:
-            text = text.format(page=bible_page or "")
+        text = text.format(ref=ref, testament=testament, page=bible_page or "")
 
         run.text = text
         if run_cfg.get("font"):
@@ -112,7 +108,7 @@ def add_scripture_verse_slide(out_prs, ref, verses):
     tb_ref = slide.shapes.add_textbox(bpos[0], bpos[1], bsize[0], bsize[1])
     tf_ref = tb_ref.text_frame
     p_ref = tf_ref.paragraphs[0]
-    p_ref.alignment = 1  # left
+    p_ref.alignment = PP_PARAGRAPH_ALIGNMENT.LEFT
     run_ref = p_ref.add_run()
     run_ref.text = ref
     run_ref.font.name = bar_style.get("font", "標楷體")
@@ -259,13 +255,13 @@ def add_sermon_point_slide(out_prs, spec):
         run0.font.bold = True
 
         p_heading = tf.add_paragraph()
-        p_heading.alignment = 0  # left
+        p_heading.alignment = PP_PARAGRAPH_ALIGNMENT.LEFT  # left
         run_heading = p_heading.add_run()
         run_heading.text = heading
 
         for pt in points:
             p_pt = tf.add_paragraph()
-            p_pt.alignment = 0
+            p_pt.alignment = PP_PARAGRAPH_ALIGNMENT.LEFT
             run_pt = p_pt.add_run()
             run_pt.text = pt
     else:
@@ -279,7 +275,7 @@ def add_sermon_point_slide(out_prs, spec):
         run0.font.bold = True
         for text in [heading] + points:
             p = tf.add_paragraph()
-            p.alignment = 0
+            p.alignment = PP_PARAGRAPH_ALIGNMENT.LEFT
             run = p.add_run()
             run.text = text
 
@@ -299,7 +295,7 @@ def add_announcement_slide(out_prs, spec):
         tf.clear()
         p = tf.paragraphs[0]
         p.text = text
-        p.alignment = 0  # left
+        p.alignment = PP_PARAGRAPH_ALIGNMENT.LEFT
     else:
         tb = slide.shapes.add_textbox(
             Emu(998220), Emu(-152400), Emu(9403080), Emu(1143000)
@@ -312,7 +308,7 @@ def add_announcement_slide(out_prs, spec):
         tf = tb2.text_frame
         tf.word_wrap = True
         p = tf.paragraphs[0]
-        p.alignment = 0  # left
+        p.alignment = PP_PARAGRAPH_ALIGNMENT.LEFT
         run = p.add_run()
         run.text = text
         run.font.size = Pt(18)

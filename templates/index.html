@@ -215,6 +215,78 @@
     color: #fde68a;
     margin-top: 0.75rem;
   }
+
+  /* Plan panel */
+  .plan-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    border-bottom: 1px solid #334155;
+    font-size: 0.82rem;
+  }
+  .plan-item:last-child { border-bottom: none; }
+
+  .plan-item.warning {
+    background: #451a03;
+  }
+
+  .plan-badge {
+    display: inline-block;
+    min-width: 50px;
+    padding: 0.2rem 0.5rem;
+    background: #1e3a5f;
+    color: #7dd3fc;
+    border-radius: 4px;
+    font-weight: 600;
+    font-size: 0.75rem;
+  }
+
+  .plan-label {
+    flex: 1;
+    color: #e2e8f0;
+    word-break: break-word;
+  }
+
+  .plan-source {
+    font-size: 0.75rem;
+    color: #94a3b8;
+    min-width: 100px;
+    text-align: right;
+  }
+
+  .plan-count {
+    color: #7dd3fc;
+    font-weight: 600;
+    min-width: 40px;
+    text-align: right;
+  }
+
+  .plan-status {
+    font-size: 1rem;
+  }
+
+  .scripture-row {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+  }
+
+  .scripture-row input {
+    width: 60px;
+    padding: 0.25rem 0.4rem;
+    background: #0f172a;
+    border: 1px solid #475569;
+    border-radius: 4px;
+    color: #e2e8f0;
+    font-size: 0.82rem;
+  }
+
+  .scripture-row input:focus {
+    outline: none;
+    border-color: #7dd3fc;
+  }
 </style>
 </head>
 <body>
@@ -252,18 +324,45 @@
     </div>
   </div>
 
-  <!-- Step 2: Generate -->
+  <!-- Step 2: Plan Preview -->
   <div class="card">
-    <h2>② 產生 PowerPoint</h2>
+    <h2>② 預覽投影片計畫</h2>
 
     <div class="generate-row">
-      <button class="btn btn-primary" id="gen-btn" onclick="generate()">
-        🚀 產生 PPT
+      <button class="btn btn-primary" id="plan-btn" onclick="showPlan()">
+        👁 Plan 預覽
       </button>
-      <span id="gen-hint" style="font-size:0.82rem; color:#64748b;">
+      <span id="plan-hint" style="font-size:0.82rem; color:#64748b;">
         請先上傳 PDF 程序單
       </span>
     </div>
+
+    <div id="plan-status-box" style="display:none; margin-top:1rem; background:#0f172a; border:1px solid #334155; border-radius:8px; padding:1rem;">
+      <div id="plan-status-msg"></div>
+    </div>
+
+    <div id="plan-panel" style="display:none; margin-top:1rem;">
+      <div style="font-size:0.85rem; color:#7dd3fc; margin-bottom:0.75rem; font-weight:600;">投影片預覽</div>
+      <div id="plan-content" style="background:#0f172a; border:1px solid #334155; border-radius:8px; max-height:400px; overflow-y:auto; display:flex; flex-direction:column; gap:0;"></div>
+
+      <div style="margin-top:1rem; padding:0.75rem; background:#1a2a3a; border-radius:6px; border-left:3px solid #fbbf24; color:#fcd34d; font-size:0.82rem;" id="plan-warnings" style="display:none;">
+        ⚠ 某些投影片無法直接讀取，將使用佔位符
+      </div>
+
+      <div style="margin-top:1rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
+        <button class="btn btn-success" id="gen-final-btn" onclick="generate()">
+          🚀 產生 PPTX
+        </button>
+        <button class="btn btn-ghost" onclick="closePlan()">
+          取消
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Step 3: Generate Status -->
+  <div class="card">
+    <h2>③ 產生狀態</h2>
 
     <div id="status-box">
       <div id="status-msg"></div>
@@ -356,26 +455,128 @@ async function clearAll() {
 
 function checkGenReady() {
   const hasPdf = Object.keys(uploadedFiles).some(n => n.toLowerCase().endsWith('.pdf'));
-  const btn = document.getElementById('gen-btn');
-  const hint = document.getElementById('gen-hint');
+  const btn = document.getElementById('plan-btn');
+  const hint = document.getElementById('plan-hint');
   btn.disabled = !hasPdf;
   hint.textContent = hasPdf ? '準備就緒' : '請先上傳 PDF 程序單';
 }
 
+// ── Plan Preview ─────────────────────────────────────────────────────────────
+let currentPlan = null;
+
+async function showPlan() {
+  const btn = document.getElementById('plan-btn');
+  btn.disabled = true;
+
+  const statusBox = document.getElementById('plan-status-box');
+  const statusMsg = document.getElementById('plan-status-msg');
+  statusBox.style.display = 'block';
+  statusMsg.innerHTML = '<span class="spinner"></span> 規劃投影片中...';
+
+  document.getElementById('plan-panel').style.display = 'none';
+
+  try {
+    const res = await fetch('/api/plan', { method: 'POST' });
+    const data = await res.json();
+
+    if (data.error) {
+      statusMsg.innerHTML = `<span style="color:#ef4444;">❌ 錯誤：${data.error}</span>`;
+      if (data.detail) {
+        statusMsg.innerHTML += `<pre style="font-size:0.7rem;color:#94a3b8;margin-top:0.5rem;white-space:pre-wrap;">${data.detail}</pre>`;
+      }
+      toast('規劃失敗', 'error');
+    } else {
+      currentPlan = data.plan || [];
+      renderPlan(currentPlan);
+      statusBox.style.display = 'none';
+      document.getElementById('plan-panel').style.display = 'block';
+      toast('規劃完成！請檢查下方預覽', 'success');
+    }
+  } catch (err) {
+    statusMsg.innerHTML = `<span style="color:#ef4444;">❌ ${err.message}</span>`;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function renderPlan(plan) {
+  const el = document.getElementById('plan-content');
+  const hasWarnings = plan.some(item => item.status === 'warning');
+
+  el.innerHTML = plan.map((item, idx) => {
+    const statusIcon = item.status === 'warning' ? '⚠' : '✓';
+    const itemClass = item.status === 'warning' ? 'plan-item warning' : 'plan-item';
+
+    // Scripture row with bible page input
+    if (item.section === 'scripture') {
+      return `<div class="${itemClass}">
+        <span class="plan-status">${statusIcon}</span>
+        <span class="plan-badge">${item.label}</span>
+        <span class="plan-label">${item.label}</span>
+        <span class="plan-source">${item.source}</span>
+        <span class="plan-count">${item.slides} 頁</span>
+      </div>
+      <div class="plan-item" style="background:#0f172a;">
+        <span style="color:#7dd3fc; font-weight:600; min-width:100px;">經文頁碼：</span>
+        <div class="scripture-row">
+          <span>${item.testament || '新約'}</span>
+          <span>第</span>
+          <input type="number" id="bible-page-input" placeholder="?" min="1" max="999">
+          <span>頁</span>
+        </div>
+      </div>`;
+    }
+
+    return `<div class="${itemClass}">
+      <span class="plan-status">${statusIcon}</span>
+      <span class="plan-badge">${item.section || 'section'}</span>
+      <span class="plan-label">${item.label}</span>
+      <span class="plan-source">${item.source}</span>
+      <span class="plan-count">${item.slides} 頁</span>
+    </div>`;
+  }).join('');
+
+  if (hasWarnings) {
+    document.getElementById('plan-warnings').style.display = 'block';
+  } else {
+    document.getElementById('plan-warnings').style.display = 'none';
+  }
+}
+
+function closePlan() {
+  document.getElementById('plan-panel').style.display = 'none';
+  document.getElementById('plan-status-box').style.display = 'none';
+  currentPlan = null;
+}
+
 // ── Generate ─────────────────────────────────────────────────────────────────
 async function generate() {
-  const btn = document.getElementById('gen-btn');
+  const btn = document.getElementById('gen-final-btn');
   btn.disabled = true;
 
   const statusBox = document.getElementById('status-box');
   const statusMsg = document.getElementById('status-msg');
   statusBox.classList.add('visible');
-  statusMsg.innerHTML = '<span class="spinner"></span> 解析程序單，產生 PPT 中...';
+  statusMsg.innerHTML = '<span class="spinner"></span> 產生 PPTX 中...';
 
   document.getElementById('summary').classList.remove('visible');
+  closePlan();
 
   try {
-    const res = await fetch('/api/generate', { method: 'POST' });
+    // Collect bible page number if provided
+    const biblePageInput = document.getElementById('bible-page-input');
+    const biblePage = biblePageInput ? biblePageInput.value : null;
+
+    const body = {};
+    if (biblePage) {
+      body.bible_page = parseInt(biblePage, 10);
+    }
+
+    const res = await fetch('/api/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    });
     const data = await res.json();
 
     if (data.error) {

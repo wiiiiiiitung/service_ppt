@@ -7,6 +7,12 @@ to template edits.
 
 # Map slide semantic names to text markers that identify them in the template PPTX
 SLIDE_MARKERS = {
+    "logo":            "c",  # church logo or first intro slide marker
+    "welcome":         "歡迎",
+    "blank":           None,  # blank slide (no marker)
+    "zoom_info":       "Zoom",
+    "prepare":         "安靜",
+    "opening":         "開  會  詩",
     "call_to_worship": "宣  召",
     "prayer":          "祈  禱",
     "lords_prayer_1":  "主禱文",
