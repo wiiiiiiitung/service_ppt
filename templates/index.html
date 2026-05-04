@@ -302,7 +302,14 @@ fileInput.addEventListener('change', () => uploadFiles(fileInput.files));
 async function uploadFiles(fileList) {
   if (!fileList.length) return;
   const fd = new FormData();
-  for (const f of fileList) fd.append('files', f);
+  for (const f of fileList) {
+    const ext = f.name.split('.').pop().toLowerCase();
+    if (ext === 'ppt') {
+      toast('⚠ .ppt 無法直接讀取，請先轉換為 .pptx', 'warning');
+      continue;
+    }
+    fd.append('files', f);
+  }
 
   const res = await fetch('/api/upload', { method: 'POST', body: fd });
   const data = await res.json();
@@ -442,8 +449,24 @@ function toast(msg, type='success') {
   setTimeout(() => el.remove(), 3500);
 }
 
-// Init
-checkGenReady();
+// ── Init ──────────────────────────────────────────────────────────────────────
+async function restoreFileList() {
+  try {
+    const res = await fetch('/api/files');
+    const data = await res.json();
+    if (data.files) {
+      uploadedFiles = {};
+      data.files.forEach(f => {
+        uploadedFiles[f.name] = { name: f.name, size: f.size };
+      });
+      renderFileList();
+    }
+  } catch (err) {
+    console.error('Failed to restore file list:', err);
+  }
+}
+
+restoreFileList().then(() => checkGenReady());
 </script>
 </body>
 </html>

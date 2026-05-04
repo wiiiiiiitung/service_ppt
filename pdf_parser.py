@@ -3,6 +3,12 @@
 import re
 import pdfplumber
 
+_PRESENTER_RE = re.compile(
+    r"(司會/牧師|司會/會眾|眾立|會眾|司會|大詩班|陳牧師|"
+    r"詩班[A-Za-z一-鿿]組?|"
+    r"[一-鿿]{2,6}牧師|[一-鿿]{2,6}執事|[一-鿿]{2,6}長老)"
+)
+
 
 def parse_agenda(pdf_path):
     """
@@ -16,11 +22,16 @@ def parse_agenda(pdf_path):
 
     result = {
         "date": _extract_date(pages),
-        "worship_order": _extract_worship_order(pages[2] if len(pages) > 2 else ""),
-        "sermon_outline": _extract_sermon_outline(pages[3] if len(pages) > 3 else ""),
-        "announcements": _extract_announcements(pages[0] if pages else ""),
+        "worship_order": _extract_worship_order(_find_page(pages, "主日敬拜程序")),
+        "sermon_outline": _extract_sermon_outline(_find_page(pages, "講台綱要")),
+        "announcements": _extract_announcements(_find_page(pages, "報告事項")),
     }
     return result
+
+
+def _find_page(pages, marker):
+    """Return the first page containing the marker text, or empty string if not found."""
+    return next((p for p in pages if marker in p), "")
 
 
 def _extract_date(pages):
@@ -75,16 +86,9 @@ def _extract_worship_order(text):
 def _parse_order_line(line):
     """Parse a single worship order line into structured data."""
 
-    # Known presenter suffixes — match from the end of the line
-    PRESENTER_RE = (
-        r"(司會/牧師|司會/會眾|眾立|會眾|司會|大詩班|陳牧師|"
-        r"詩班[A-Za-z\u4e00-\u9fff]組?|"
-        r"[\u4e00-\u9fff]{2,6}牧師|[\u4e00-\u9fff]{2,6}執事|[\u4e00-\u9fff]{2,6}長老)"
-    )
-
     def split_presenter(body):
         """Split 'title presenter' into (title, presenter) using trailing presenter."""
-        m = re.search(r"\s+" + PRESENTER_RE + r"$", body)
+        m = re.search(r"\s+" + _PRESENTER_RE.pattern + r"$", body)
         if m:
             return body[:m.start()].strip(), m.group(1).strip()
         return body.strip(), ""

@@ -4,77 +4,22 @@ import json
 import re
 import urllib.request
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 
 
-# Map common Chinese book abbreviations/full names to book names usable in the API
+# Map abbreviations to full book names
 _BOOK_ALIASES = {
-    "尼希米記": "尼希米記",
     "尼希米": "尼希米記",
-    "創世記": "創世記",
-    "出埃及記": "出埃及記",
-    "利未記": "利未記",
-    "民數記": "民數記",
-    "申命記": "申命記",
-    "約書亞記": "約書亞記",
-    "士師記": "士師記",
-    "路得記": "路得記",
-    "撒母耳記上": "撒母耳記上",
-    "撒母耳記下": "撒母耳記下",
-    "列王紀上": "列王紀上",
-    "列王紀下": "列王紀下",
-    "歷代志上": "歷代志上",
-    "歷代志下": "歷代志下",
-    "以斯拉記": "以斯拉記",
-    "以斯帖記": "以斯帖記",
-    "約伯記": "約伯記",
-    "詩篇": "詩篇",
-    "箴言": "箴言",
-    "傳道書": "傳道書",
-    "雅歌": "雅歌",
-    "以賽亞書": "以賽亞書",
-    "耶利米書": "耶利米書",
-    "耶利米哀歌": "耶利米哀歌",
-    "以西結書": "以西結書",
-    "但以理書": "但以理書",
-    "何西阿書": "何西阿書",
-    "約珥書": "約珥書",
-    "阿摩司書": "阿摩司書",
-    "俄巴底亞書": "俄巴底亞書",
-    "約拿書": "約拿書",
-    "彌迦書": "彌迦書",
-    "那鴻書": "那鴻書",
-    "哈巴谷書": "哈巴谷書",
-    "西番雅書": "西番雅書",
-    "哈該書": "哈該書",
-    "撒迦利亞書": "撒迦利亞書",
-    "瑪拉基書": "瑪拉基書",
-    "馬太福音": "馬太福音",
-    "馬可福音": "馬可福音",
-    "路加福音": "路加福音",
-    "約翰福音": "約翰福音",
-    "使徒行傳": "使徒行傳",
-    "羅馬書": "羅馬書",
-    "哥林多前書": "哥林多前書",
-    "哥林多後書": "哥林多後書",
-    "加拉太書": "加拉太書",
-    "以弗所書": "以弗所書",
-    "腓立比書": "腓立比書",
-    "歌羅西書": "歌羅西書",
-    "帖撒羅尼迦前書": "帖撒羅尼迦前書",
-    "帖撒羅尼迦後書": "帖撒羅尼迦後書",
-    "提摩太前書": "提摩太前書",
-    "提摩太後書": "提摩太後書",
-    "提多書": "提多書",
-    "腓利門書": "腓利門書",
-    "希伯來書": "希伯來書",
-    "雅各書": "雅各書",
-    "彼得前書": "彼得前書",
-    "彼得後書": "彼得後書",
-    "約翰一書": "約翰一書",
-    "約翰二書": "約翰二書",
-    "約翰三書": "約翰三書",
-    "猶大書": "猶大書",
-    "啟示錄": "啟示錄",
+}
+
+# New Testament books (for testament detection)
+_NT_BOOKS = {
+    "馬太福音", "馬可福音", "路加福音", "約翰福音", "使徒行傳",
+    "羅馬書", "哥林多前書", "哥林多後書", "加拉太書", "以弗所書",
+    "腓立比書", "歌羅西書", "帖撒羅尼迦前書", "帖撒羅尼迦後書",
+    "提摩太前書", "提摩太後書", "提多書", "腓利門書", "希伯來書",
+    "雅各書", "彼得前書", "彼得後書", "約翰一書", "約翰二書",
+    "約翰三書", "猶大書", "啟示錄",
 }
 
 API_BASE = "https://bible-api.com"
@@ -110,11 +55,28 @@ def parse_reference(ref):
     return None
 
 
-def fetch_verses(ref):
-    """
-    Fetch CUV (和合本) verses for a scripture reference string.
+def get_testament(book_name):
+    """Return '新約' or '舊約' based on book name."""
+    return "新約" if book_name in _NT_BOOKS else "舊約"
 
-    Returns list of dicts: [{verse: int, text: str}, ...] or None on failure.
+
+def _do_fetch(url):
+    """Helper: perform the actual HTTP fetch (blocking call for ThreadPoolExecutor)."""
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+        verses = data.get("verses", [])
+        return [{"verse": v["verse"], "text": v["text"].strip()} for v in verses]
+    except Exception:
+        return None
+
+
+def fetch_verses(ref, timeout=5):
+    """
+    Fetch CUV (和合本) verses for a scripture reference string (non-blocking).
+
+    Returns list of dicts: [{verse: int, text: str}, ...] or None on failure/timeout.
     """
     parsed = parse_reference(ref)
     if not parsed:
@@ -126,14 +88,12 @@ def fetch_verses(ref):
     query = f"{book_name}{chapter}:{v_start}-{v_end}"
     url = f"{API_BASE}/{urllib.parse.quote(query)}?translation=cuv"
 
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = json.loads(resp.read())
-        verses = data.get("verses", [])
-        return [{"verse": v["verse"], "text": v["text"].strip()} for v in verses]
-    except Exception:
-        return None
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(_do_fetch, url)
+        try:
+            return future.result(timeout=timeout)
+        except (FuturesTimeout, Exception):
+            return None
 
 
 def group_verses_for_slides(verses, chars_per_line=18, max_lines=7):
