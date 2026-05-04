@@ -18,7 +18,7 @@ from pdf_parser import parse_agenda
 from ppt_builder import build_pptx
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(24)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Use /tmp for Vercel serverless (read-only filesystem), local uploads/ for development
