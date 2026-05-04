@@ -189,8 +189,15 @@ def _get_anthem_slides(libraries, item, input_files):
     if matched:
         try:
             lyrics = _parse_docx_lyrics(matched)
+            # Skip only the first title paragraph; keep duplicates as lyrics
             clean_title = re.sub(r"\s+", "", title)
-            verses = [v for v in lyrics if re.sub(r"\s+", "", v) != clean_title]
+            verses = []
+            title_seen = False
+            for v in lyrics:
+                if not title_seen and re.sub(r"\s+", "", v) == clean_title:
+                    title_seen = True
+                    continue
+                verses.append(v)
             if verses:
                 for chunk in _group_anthem_verses(verses, max_lines=6):
                     slides.append({"type": "anthem_lyrics", "title": title, "lyrics": chunk})
@@ -211,32 +218,20 @@ def _get_anthem_slides(libraries, item, input_files):
     return slides
 
 
-def _group_anthem_verses(verses, max_lines=20):
-    """Pack verses into slide-sized chunks."""
-    groups = []
-    current = []
-    current_lines = 0
+def _group_anthem_verses(verses, max_lines=6):
+    """
+    Pack verses into slide-sized chunks of exactly max_lines lines.
 
-    def flush():
-        nonlocal current, current_lines
-        if current:
-            groups.append("\n".join(current))
-            current = []
-            current_lines = 0
-
+    Flattens paragraph boundaries — splits across paragraphs when needed
+    so each slide gets a full max_lines count (last slide may have fewer).
+    """
+    all_lines = []
     for v in verses:
-        v_lines = v.split("\n")
-        if len(v_lines) > max_lines:
-            flush()
-            for i in range(0, len(v_lines), max_lines):
-                groups.append("\n".join(v_lines[i:i + max_lines]))
-            continue
-        if current_lines + len(v_lines) > max_lines:
-            flush()
-        current.append(v)
-        current_lines += len(v_lines)
+        all_lines.extend(v.split("\n"))
 
-    flush()
+    groups = []
+    for i in range(0, len(all_lines), max_lines):
+        groups.append("\n".join(all_lines[i:i + max_lines]))
     return groups
 
 
