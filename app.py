@@ -19,6 +19,7 @@ from ppt_builder import build_pptx
 from slide_planner import plan_slides
 from slide_finder import find_slide
 from bible_fetcher import get_testament
+from file_converter import convert_legacy
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(24)
@@ -43,7 +44,7 @@ if os.path.isdir(_example_dir):
         if TEMPLATE_PATH:
             break
 
-ALLOWED_EXTENSIONS = {".pdf", ".ppt", ".pptx", ".docx"}
+ALLOWED_EXTENSIONS = {".pdf", ".ppt", ".pptx", ".doc", ".docx"}
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
@@ -81,6 +82,15 @@ def upload_file():
             continue
         dest = os.path.join(upload_dir, name)
         f.save(dest)
+
+        # Auto-convert legacy .ppt/.doc to modern formats
+        if ext in (".ppt", ".doc"):
+            new_path = convert_legacy(dest, upload_dir)
+            if new_path:
+                os.remove(dest)
+                dest = new_path
+                name = os.path.basename(new_path)
+
         saved.append({"name": name, "size": os.path.getsize(dest)})
 
     return jsonify({"uploaded": saved})

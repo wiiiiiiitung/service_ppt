@@ -109,7 +109,7 @@ def group_verses_for_slides(verses, chars_per_line=18, max_lines=7):
 
     for v in verses:
         verse_lines = max(1, -(-len(v["text"]) // chars_per_line))  # ceil division
-        if current and current_lines + verse_lines > max_lines:
+        if current and current_lines + verse_lines >= max_lines:
             groups.append(current)
             current = [v]
             current_lines = verse_lines

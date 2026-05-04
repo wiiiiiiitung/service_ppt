@@ -77,15 +77,15 @@ def add_scripture_title_slide(out_prs, item, bible_page=None):
 
     # Build multi-run paragraph from config
     runs_config = style.get("runs", [])
-    for i, run_cfg in enumerate(runs_config):
-        if i > 0:
-            run = p.add_run()
-        else:
-            run = p.add_run()
+    for run_cfg in runs_config:
+        # Skip page-dependent runs when no page number provided
+        if run_cfg.get("page_only") and not bible_page:
+            continue
 
         text = run_cfg.get("text", "")
         text = text.format(ref=ref, testament=testament, page=bible_page or "")
 
+        run = p.add_run()
         run.text = text
         if run_cfg.get("font"):
             run.font.name = run_cfg["font"]

@@ -87,8 +87,8 @@ SLIDE_STYLES = {
         "runs": [
             {"text": "經文",              "font": None,       "size_pt": Pt(60), "bold": True},
             {"text": "{ref}",            "font": "DFKai-SB", "size_pt": Pt(72), "bold": True},
-            {"text": "  ",               "font": "DFKai-SB", "size_pt": Pt(72), "bold": True},
-            {"text": "({testament}第{page}頁)", "font": "標楷體", "size_pt": Pt(54), "bold": True},
+            {"text": "  ",               "font": "DFKai-SB", "size_pt": Pt(72), "bold": True, "page_only": True},
+            {"text": "({testament}第{page}頁)", "font": "標楷體", "size_pt": Pt(54), "bold": True, "page_only": True},
         ],
         "color": None,
     },
