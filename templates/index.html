@@ -345,6 +345,14 @@
       <div style="font-size:0.85rem; color:#7dd3fc; margin-bottom:0.75rem; font-weight:600;">投影片預覽</div>
       <div id="plan-content" style="background:#0f172a; border:1px solid #334155; border-radius:8px; max-height:400px; overflow-y:auto; display:flex; flex-direction:column; gap:0;"></div>
 
+      <div id="match-section" style="display:none; margin-top:1rem;">
+        <div style="font-size:0.85rem; color:#7dd3fc; margin-bottom:0.5rem; font-weight:600;">檔案對應 <span style="color:#64748b; font-weight:400;">— 若自動對應錯誤，可手動指定</span></div>
+        <div id="match-content" style="background:#0f172a; border:1px solid #334155; border-radius:8px; padding:0.5rem; display:flex; flex-direction:column; gap:0.5rem;"></div>
+        <div style="margin-top:0.5rem;">
+          <button class="btn btn-ghost" onclick="reapplyOverrides()" style="font-size:0.8rem;">↻ 套用對應並重新預覽</button>
+        </div>
+      </div>
+
       <div style="margin-top:1rem; padding:0.75rem; background:#1a2a3a; border-radius:6px; border-left:3px solid #fbbf24; color:#fcd34d; font-size:0.82rem;" id="plan-warnings" style="display:none;">
         ⚠ 某些投影片無法直接讀取，將使用佔位符
       </div>
@@ -463,8 +471,10 @@ function checkGenReady() {
 
 // ── Plan Preview ─────────────────────────────────────────────────────────────
 let currentPlan = null;
+let currentMatchItems = [];
+let currentOverrides = {};   // id → filename ("" = explicit "no file")
 
-async function showPlan() {
+async function showPlan(useOverrides = false) {
   const btn = document.getElementById('plan-btn');
   btn.disabled = true;
 
@@ -476,7 +486,11 @@ async function showPlan() {
   document.getElementById('plan-panel').style.display = 'none';
 
   try {
-    const res = await fetch('/api/plan', { method: 'POST' });
+    const res = await fetch('/api/plan', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(useOverrides ? { overrides: currentOverrides } : {}),
+    });
     const data = await res.json();
 
     if (data.error) {
@@ -487,7 +501,16 @@ async function showPlan() {
       toast('規劃失敗', 'error');
     } else {
       currentPlan = data.plan || [];
+      currentMatchItems = data.match_items || [];
+      // Seed overrides from auto-match on first preview; keep user choices on re-apply
+      if (!useOverrides) {
+        currentOverrides = {};
+        currentMatchItems.forEach(it => {
+          currentOverrides[it.id] = it.matched_file || '';
+        });
+      }
       renderPlan(currentPlan);
+      renderMatchItems(currentMatchItems);
       statusBox.style.display = 'none';
       document.getElementById('plan-panel').style.display = 'block';
       toast('規劃完成！請檢查下方預覽', 'success');
@@ -498,6 +521,49 @@ async function showPlan() {
     btn.disabled = false;
   }
 }
+
+function renderMatchItems(items) {
+  const section = document.getElementById('match-section');
+  const el = document.getElementById('match-content');
+  if (!items.length) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = 'block';
+  el.innerHTML = items.map(it => {
+    const selected = currentOverrides[it.id] ?? (it.matched_file || '');
+    const isAuto = !!it.matched_file;
+    const options = [
+      `<option value="">— 無檔案（使用範本）—</option>`,
+      ...it.candidates.map(c =>
+        `<option value="${escapeAttr(c)}"${c === selected ? ' selected' : ''}>${escapeHtml(c)}</option>`
+      ),
+    ].join('');
+    const statusIcon = selected ? (isAuto && selected === it.matched_file ? '✓' : '✎') : '⚠';
+    const statusColor = selected ? (isAuto && selected === it.matched_file ? '#22c55e' : '#fbbf24') : '#ef4444';
+    return `<div style="display:flex; align-items:center; gap:0.5rem; padding:0.4rem 0.5rem; border-bottom:1px solid #1e293b;">
+      <span style="color:${statusColor}; width:1rem; text-align:center;">${statusIcon}</span>
+      <span style="flex:1; min-width:0; font-size:0.85rem; color:#e2e8f0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${escapeHtml(it.label)}</span>
+      <select data-item-id="${escapeAttr(it.id)}" onchange="onOverrideChange(event)" style="background:#1e293b; color:#e2e8f0; border:1px solid #334155; border-radius:4px; padding:0.25rem 0.4rem; font-size:0.8rem; max-width:60%;">
+        ${options}
+      </select>
+    </div>`;
+  }).join('');
+}
+
+function onOverrideChange(e) {
+  const id = e.target.dataset.itemId;
+  currentOverrides[id] = e.target.value;
+}
+
+function reapplyOverrides() {
+  showPlan(true);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function escapeAttr(s) { return escapeHtml(s); }
 
 function renderPlan(plan) {
   const el = document.getElementById('plan-content');
@@ -547,6 +613,8 @@ function closePlan() {
   document.getElementById('plan-panel').style.display = 'none';
   document.getElementById('plan-status-box').style.display = 'none';
   currentPlan = null;
+  currentMatchItems = [];
+  currentOverrides = {};
 }
 
 // ── Generate ─────────────────────────────────────────────────────────────────
@@ -560,16 +628,21 @@ async function generate() {
   statusMsg.innerHTML = '<span class="spinner"></span> 產生 PPTX 中...';
 
   document.getElementById('summary').classList.remove('visible');
+
+  // Capture state before closePlan() clears it
+  const biblePageInput = document.getElementById('bible-page-input');
+  const biblePage = biblePageInput ? biblePageInput.value : null;
+  const overridesToSend = { ...currentOverrides };
+
   closePlan();
 
   try {
-    // Collect bible page number if provided
-    const biblePageInput = document.getElementById('bible-page-input');
-    const biblePage = biblePageInput ? biblePageInput.value : null;
-
     const body = {};
     if (biblePage) {
       body.bible_page = parseInt(biblePage, 10);
+    }
+    if (Object.keys(overridesToSend).length) {
+      body.overrides = overridesToSend;
     }
 
     const res = await fetch('/api/generate', {

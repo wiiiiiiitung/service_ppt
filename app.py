@@ -16,7 +16,7 @@ from flask import (
 
 from pdf_parser import parse_agenda
 from ppt_builder import build_pptx
-from slide_planner import plan_slides
+from slide_planner import plan_slides, plan_match_items
 from slide_finder import find_slide
 from bible_fetcher import get_testament
 from file_converter import convert_legacy
@@ -178,8 +178,18 @@ def plan():
         # Parse the agenda
         agenda = parse_agenda(pdf_path)
 
+        # Accept overrides from request body (optional) so the preview reflects
+        # the user's manual file picks for hymns/readings/anthems.
+        overrides = None
+        if request.is_json:
+            overrides = (request.get_json(silent=True) or {}).get("overrides")
+
+        # Per-item match info for the UI to render file-picker dropdowns
+        match_items = plan_match_items(agenda, input_files)
+
         # Plan slides (no bible_page yet, user will fill it in)
-        slides_spec = plan_slides(template, libraries, agenda, input_files, skip_intro=False, bible_page=None)
+        slides_spec = plan_slides(template, libraries, agenda, input_files,
+                                  skip_intro=False, bible_page=None, overrides=overrides)
 
         # Build a summary per section
         plan_summary = []
@@ -282,7 +292,7 @@ def plan():
                 "status": "ok"
             })
 
-        return jsonify({"plan": plan_summary})
+        return jsonify({"plan": plan_summary, "match_items": match_items})
 
     except Exception as e:
         import traceback
@@ -333,12 +343,15 @@ def generate():
                         if f.endswith(".pptx"):
                             library_paths.append(os.path.join(out_dir, f))
 
-        # Get bible page number from request (optional)
-        bible_page = request.json.get("bible_page") if request.json else None
+        # Get bible page number + per-item file overrides from request (optional)
+        body = request.get_json(silent=True) or {}
+        bible_page = body.get("bible_page")
+        overrides = body.get("overrides")
 
         # Build the PPTX
         build_pptx(TEMPLATE_PATH, agenda, input_files, out_path,
-                   library_paths=library_paths, intro_path=INTRO_PATH, bible_page=bible_page)
+                   library_paths=library_paths, intro_path=INTRO_PATH,
+                   bible_page=bible_page, overrides=overrides)
 
         # Store output path in session
         session["output_file"] = out_path

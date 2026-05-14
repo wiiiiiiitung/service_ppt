@@ -13,7 +13,7 @@ from bible_fetcher import fetch_verses, group_verses_for_slides
 from slide_finder import find_slide, find_consecutive
 
 
-def plan_slides(template, libraries, agenda, input_files, skip_intro=False, bible_page=None):
+def plan_slides(template, libraries, agenda, input_files, skip_intro=False, bible_page=None, overrides=None):
     """
     Build the ordered list of slide specs for the service.
 
@@ -24,12 +24,19 @@ def plan_slides(template, libraries, agenda, input_files, skip_intro=False, bibl
         input_files: Dict of filename → filepath
         skip_intro: If True, don't add intro slides (they come from intro PPTX)
         bible_page: Page number for scripture title (user input)
+        overrides: Optional dict of item_id → filename (from input_files) to
+            force a specific file. Use empty string to force "no file" (library/
+            placeholder fallback). Item ids match those from plan_match_items().
 
     Returns:
         List of slide spec dicts describing what to create
     """
     order = agenda.get("worship_order", [])
     slides = []
+    overrides = overrides or {}
+    hymn_idx = 0
+    reading_idx = 0
+    anthem_idx = 0
 
     # === Fixed pre-worship slides ===
     if not skip_intro:
@@ -52,7 +59,11 @@ def plan_slides(template, libraries, agenda, input_files, skip_intro=False, bibl
             slides.append({"type": "blank"})
 
         elif itype == "hymn":
-            hymn_slides = _get_hymn_slides(libraries, item, input_files)
+            hymn_slides = _get_hymn_slides(
+                libraries, item, input_files,
+                override=overrides.get(f"hymn-{hymn_idx}"),
+            )
+            hymn_idx += 1
             slides.extend(hymn_slides)
             slides.append({"type": "blank"})
 
@@ -70,12 +81,20 @@ def plan_slides(template, libraries, agenda, input_files, skip_intro=False, bibl
             slides.append({"type": "blank"})
 
         elif itype == "responsive":
-            reading_slides = _get_reading_slides(libraries, item, input_files)
+            reading_slides = _get_reading_slides(
+                libraries, item, input_files,
+                override=overrides.get(f"reading-{reading_idx}"),
+            )
+            reading_idx += 1
             slides.extend(reading_slides)
             slides.append({"type": "blank"})
 
         elif itype == "anthem":
-            anthem_slides = _get_anthem_slides(libraries, item, input_files)
+            anthem_slides = _get_anthem_slides(
+                libraries, item, input_files,
+                override=overrides.get(f"anthem-{anthem_idx}"),
+            )
+            anthem_idx += 1
             slides.extend(anthem_slides)
             slides.append({"type": "blank"})
 
@@ -130,13 +149,15 @@ def plan_slides(template, libraries, agenda, input_files, skip_intro=False, bibl
     return slides
 
 
-def _get_hymn_slides(libraries, item, input_files, is_doxology=False):
+def _get_hymn_slides(libraries, item, input_files, is_doxology=False, override=None):
     """Get slides for a hymn item, from input file or slide library."""
     num = item.get("number")
     title = item.get("title", "")
 
     # Try readable input file (PPTX only)
-    matched = _match_file(num, title, input_files, [".pptx"])
+    matched = _resolve_input(override, input_files, [".pptx"])
+    if matched is _UNSET:
+        matched = _match_file(num, title, input_files, [".pptx"])
     if matched:
         try:
             src = Presentation(matched)
@@ -156,12 +177,14 @@ def _get_hymn_slides(libraries, item, input_files, is_doxology=False):
     return [{"type": "hymn_placeholder", "label": label}]
 
 
-def _get_reading_slides(libraries, item, input_files):
+def _get_reading_slides(libraries, item, input_files, override=None):
     """Get slides for the responsive reading."""
     num = item.get("number")
     title = item.get("title", "")
 
-    matched = _match_file(num, title, input_files, [".pptx"])
+    matched = _resolve_input(override, input_files, [".pptx"])
+    if matched is _UNSET:
+        matched = _match_file(num, title, input_files, [".pptx"])
     if matched:
         try:
             src = Presentation(matched)
@@ -179,13 +202,15 @@ def _get_reading_slides(libraries, item, input_files):
     return [{"type": "hymn_placeholder", "label": f"啟應文 {num}: {title}"}]
 
 
-def _get_anthem_slides(libraries, item, input_files):
+def _get_anthem_slides(libraries, item, input_files, override=None):
     """Get anthem title + lyrics slides from DOCX or library."""
     title = item.get("title", "")
     slides = [{"type": "anthem_title", "title": title}]
 
     # Try DOCX for lyrics
-    matched = _match_file(None, title, input_files, [".docx", ".doc"])
+    matched = _resolve_input(override, input_files, [".docx", ".doc"])
+    if matched is _UNSET:
+        matched = _match_file(None, title, input_files, [".docx", ".doc"])
     if matched:
         try:
             lyrics = _parse_docx_lyrics(matched)
@@ -336,15 +361,38 @@ def _get_announcement_slides(agenda):
     return slides
 
 
+_UNSET = object()
+
+
+def _resolve_input(override, input_files, extensions):
+    """
+    Resolve a user-supplied override into a file path.
+
+    Returns:
+        - _UNSET if no override (caller should run auto-match)
+        - None if override is "" or unknown (force "no file" fallback)
+        - filepath str otherwise
+    """
+    if override is None:
+        return _UNSET
+    if override == "":
+        return None
+    if override in input_files:
+        ext = os.path.splitext(override)[1].lower()
+        if ext in extensions:
+            return input_files[override]
+    return None
+
+
 def _match_file(number, title, input_files, extensions):
     """Find an input file matching a hymn number or title."""
+    # First pass: strict number-prefix or whole-string substring (existing behavior)
     for fname, fpath in input_files.items():
         ext = os.path.splitext(fname)[1].lower()
         if ext not in extensions:
             continue
         base = os.path.splitext(fname)[0]
 
-        # Match by number prefix
         if number is not None:
             patterns = [
                 rf"^0*{number}[-_\s]",
@@ -354,14 +402,92 @@ def _match_file(number, title, input_files, extensions):
                 if re.match(pat, base, re.IGNORECASE):
                     return fpath
 
-        # Match by title substring
         if title:
             clean_title = re.sub(r"\s+", "", title)
             clean_base = re.sub(r"\s+", "", base)
-            if clean_title in clean_base or clean_base in clean_title:
+            if clean_title and (clean_title in clean_base or clean_base in clean_title):
                 return fpath
 
-    return None
+    # Second pass: looser fallback — number anywhere with non-digit boundary,
+    # or fuzzy title (≥60% char overlap)
+    best = None
+    best_score = 0.0
+    for fname, fpath in input_files.items():
+        ext = os.path.splitext(fname)[1].lower()
+        if ext not in extensions:
+            continue
+        base = os.path.splitext(fname)[0]
+
+        if number is not None and re.search(rf"(?<!\d)0*{number}(?!\d)", base):
+            return fpath
+
+        if title:
+            clean_title = re.sub(r"[\s\-_().\[\]【】《》]", "", title)
+            clean_base = re.sub(r"[\s\-_().\[\]【】《》]", "", base)
+            if clean_title:
+                shared = sum(1 for ch in clean_title if ch in clean_base)
+                score = shared / len(clean_title)
+                if score >= 0.6 and score > best_score:
+                    best = fpath
+                    best_score = score
+
+    return best
+
+
+def plan_match_items(agenda, input_files):
+    """
+    Build the list of agenda items that need an input file, with auto-match
+    results and candidate files for each.
+
+    Item ids are stable for a given agenda order: hymn-0, hymn-1, reading-0,
+    anthem-0, etc. They line up with the overrides keys consumed by plan_slides.
+    """
+    pptx_candidates = sorted(
+        fname for fname in input_files
+        if os.path.splitext(fname)[1].lower() == ".pptx"
+    )
+    docx_candidates = sorted(
+        fname for fname in input_files
+        if os.path.splitext(fname)[1].lower() in (".docx", ".doc")
+    )
+
+    items = []
+    hymn_idx = reading_idx = anthem_idx = 0
+    for entry in agenda.get("worship_order", []):
+        itype = entry.get("type")
+        num = entry.get("number")
+        title = entry.get("title", "")
+        if itype == "hymn":
+            matched = _match_file(num, title, input_files, [".pptx"])
+            items.append({
+                "id": f"hymn-{hymn_idx}",
+                "kind": "hymn",
+                "label": f"聖詩 {num}: {title}" if num else f"聖詩: {title}",
+                "matched_file": os.path.basename(matched) if matched else None,
+                "candidates": pptx_candidates,
+            })
+            hymn_idx += 1
+        elif itype == "responsive":
+            matched = _match_file(num, title, input_files, [".pptx"])
+            items.append({
+                "id": f"reading-{reading_idx}",
+                "kind": "responsive",
+                "label": f"啟應文 {num}: {title}" if num else f"啟應文: {title}",
+                "matched_file": os.path.basename(matched) if matched else None,
+                "candidates": pptx_candidates,
+            })
+            reading_idx += 1
+        elif itype == "anthem":
+            matched = _match_file(None, title, input_files, [".docx", ".doc"])
+            items.append({
+                "id": f"anthem-{anthem_idx}",
+                "kind": "anthem",
+                "label": f"獻詩: {title}",
+                "matched_file": os.path.basename(matched) if matched else None,
+                "candidates": docx_candidates,
+            })
+            anthem_idx += 1
+    return items
 
 
 def _find_hymn_slides_in_library(prs, number, title):

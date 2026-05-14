@@ -16,7 +16,7 @@ from slide_generators import (
 )
 
 
-def build_pptx(template_path, agenda, input_files, output_path, library_paths=None, intro_path=None, bible_page=None):
+def build_pptx(template_path, agenda, input_files, output_path, library_paths=None, intro_path=None, bible_page=None, overrides=None):
     """
     Build the worship PPTX.
 
@@ -47,7 +47,7 @@ def build_pptx(template_path, agenda, input_files, output_path, library_paths=No
     # Plan all slides
     slides_to_add = plan_slides(
         template, libraries, agenda, input_files,
-        skip_intro=use_intro, bible_page=bible_page
+        skip_intro=use_intro, bible_page=bible_page, overrides=overrides
     )
 
     # Choose output base: intro PPTX or template
