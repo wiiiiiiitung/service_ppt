@@ -19,7 +19,7 @@ from ppt_builder import build_pptx
 from slide_planner import plan_slides, plan_match_items
 from slide_finder import find_slide
 from bible_fetcher import get_testament
-from file_converter import convert_legacy
+from file_converter import convert_legacy, convert_directory
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(24)
@@ -136,6 +136,10 @@ def clear_files():
 def plan():
     """Preview the slide plan for the worship service (without generating PPTX)."""
     upload_dir = _session_dir()
+
+    # Convert any leftover .ppt/.doc in the session dir (e.g. uploaded before
+    # this codepath existed, or from a session restored across deploys).
+    convert_directory(upload_dir)
 
     # Find the PDF
     pdf_path = None
@@ -305,6 +309,9 @@ def plan():
 def generate():
     """Parse the PDF and generate the worship PPTX."""
     upload_dir = _session_dir()
+
+    # Convert any leftover .ppt/.doc in the session dir
+    convert_directory(upload_dir)
 
     # Find the PDF
     pdf_path = None
