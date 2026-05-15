@@ -206,16 +206,6 @@
   .announce { background: #374151; color: #d1d5db; }
   .other    { background: #292524; color: #d6d3d1; }
 
-  .warning-box {
-    background: #451a03;
-    border: 1px solid #78350f;
-    border-radius: 6px;
-    padding: 0.6rem 0.9rem;
-    font-size: 0.82rem;
-    color: #fde68a;
-    margin-top: 0.75rem;
-  }
-
   /* Plan panel */
   .plan-item {
     display: flex;
@@ -313,10 +303,6 @@
       <p style="margin-top:0.4rem;">支援格式：PDF（程序單）、PPT / PPTX（聖詩）、DOCX（歌詞）</p>
     </div>
 
-    <div class="warning-box">
-      ⚠️ 舊版 .ppt 格式（二進位）無法直接讀取投影片內容，建議先在 PowerPoint 另存為 .pptx。
-    </div>
-
     <div id="file-list"></div>
 
     <div style="margin-top:0.75rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
@@ -410,11 +396,6 @@ async function uploadFiles(fileList) {
   if (!fileList.length) return;
   const fd = new FormData();
   for (const f of fileList) {
-    const ext = f.name.split('.').pop().toLowerCase();
-    if (ext === 'ppt') {
-      toast('⚠ .ppt 無法直接讀取，請先轉換為 .pptx', 'warning');
-      continue;
-    }
     fd.append('files', f);
   }
 
