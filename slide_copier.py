@@ -19,9 +19,12 @@ def copy_slide(out_prs, src_prs, index):
         out_prs: output Presentation
         src_prs: source Presentation
         index: 0-based slide index in src_prs
+
+    Returns:
+        The newly added slide, or None if index is out of range.
     """
     if index is None or index >= len(src_prs.slides):
-        return
+        return None
 
     src_slide = src_prs.slides[index]
 
@@ -52,6 +55,65 @@ def copy_slide(out_prs, src_prs, index):
         if new_bg is not None:
             new_cSld.remove(new_bg)
         new_cSld.insert(0, copy.deepcopy(src_bg))
+
+    return new_slide
+
+
+def restyle_responsive_slide(slide, slide_width):
+    """
+    Restyle a copied 啟應文 (responsive reading) slide to match the reference:
+
+    - Title box (contains 啟應文): horizontally centered at the top.
+    - Body box: paragraphs LEFT-aligned, manual line-wrap continuations merged
+      back into their parent paragraph, box widened to the slide edge.
+    """
+    from pptx.enum.text import PP_PARAGRAPH_ALIGNMENT
+
+    for shape in slide.shapes:
+        if not shape.has_text_frame:
+            continue
+        text = shape.text_frame.text
+        if not text.strip():
+            continue
+
+        if "啟應文" in text:
+            # Title: center horizontally, pin to top (skip full-width titles)
+            if shape.width < slide_width:
+                shape.left = (slide_width - shape.width) // 2
+                shape.top = 0
+        else:
+            # Body: merge continuation lines, left-align, widen to slide edge
+            _merge_continuation_paragraphs(shape.text_frame)
+            for p in shape.text_frame.paragraphs:
+                p.alignment = PP_PARAGRAPH_ALIGNMENT.LEFT
+            shape.width = slide_width - max(0, shape.left)
+
+
+def _merge_continuation_paragraphs(text_frame):
+    """
+    Merge paragraphs that start with whitespace (manual line-wrap continuations
+    from narrow source boxes) into the preceding paragraph.
+    """
+    paragraphs = list(text_frame.paragraphs)
+    for p in paragraphs[1:]:
+        if not p.runs or not p.text or not p.text[0].isspace():
+            continue
+        prev = p._p.getprevious()
+        if prev is None or not prev.tag == qn("a:p"):
+            continue
+
+        # Drop leading whitespace-only runs, lstrip the first content run
+        runs = list(p.runs)
+        while runs and not runs[0].text.strip():
+            runs[0]._r.getparent().remove(runs[0]._r)
+            runs.pop(0)
+        if runs:
+            runs[0].text = runs[0].text.lstrip()
+
+        # Move remaining runs into the previous paragraph
+        for r in runs:
+            prev.append(r._r)
+        p._p.getparent().remove(p._p)
 
 
 def clear_slides(prs):

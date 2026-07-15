@@ -7,6 +7,8 @@ This is the single source of truth for the entire PPTX structure.
 
 from pptx.util import Emu, Pt
 
+from styles import CYAN_SOFT, YELLOW
+
 # ── Worship service section sequence ──────────────────────────────────────────
 # Each entry describes one block of slides in the output PPTX.
 # Types:
@@ -39,14 +41,14 @@ SLIDE_STYLES = {
     # 獻詩 title: "獻詩: {title}" centered mid-slide
     "anthem_title": {
         "layout":   "Blank",
-        "pos":      (Emu(981777), Emu(2786743)),
-        "size":     (Emu(10501161), Emu(1015663)),
+        "pos":      (Emu(2677538), Emu(2786743)),
+        "size":     (Emu(7109639), Emu(1015663)),
         "text":     "獻詩: {title}",
         "font":     "標楷體",
         "size_pt":  Pt(60),
         "bold":     True,
         "align":    "center",
-        "color":    None,  # inherit from layout
+        "color":    CYAN_SOFT,
     },
 
     # 獻詩 / Hymn lyrics: use 詩歌 layout placeholders
@@ -78,34 +80,37 @@ SLIDE_STYLES = {
         "align":        "left",
     },
 
-    # 經文 title slide: mixed-run paragraph in one rectangle
+    # 經文 title slide: three centered lines (label / reference / page hint)
     "scripture_title": {
         "layout":   "Blank",
         "pos":      (Emu(154746), Emu(2086708)),
-        "size":     (Emu(12037254), Emu(2000250)),
-        # runs in order: label | reference | page-hint
-        "runs": [
-            {"text": "經文",              "font": None,       "size_pt": Pt(60), "bold": True},
-            {"text": "{ref}",            "font": "DFKai-SB", "size_pt": Pt(72), "bold": True},
-            {"text": "  ",               "font": "DFKai-SB", "size_pt": Pt(72), "bold": True, "page_only": True},
-            {"text": "({testament}第{page}頁)", "font": "標楷體", "size_pt": Pt(54), "bold": True, "page_only": True},
+        "size":     (Emu(12037254), Emu(3139321)),
+        "align":    "center",
+        # one entry per paragraph; each is a list of runs
+        "lines": [
+            [{"text": "經文", "font": "DFKai-SB", "size_pt": Pt(66), "bold": True, "color": CYAN_SOFT}],
+            [{"text": "{ref}", "font": "DFKai-SB", "size_pt": Pt(72), "bold": True}],
+            [
+                {"text": "({testament}第", "font": "標楷體", "size_pt": Pt(54), "bold": True, "page_only": True},
+                {"text": "{page}",         "font": "標楷體", "size_pt": Pt(54), "bold": True, "page_only": True, "color": YELLOW},
+                {"text": "頁)",            "font": "標楷體", "size_pt": Pt(54), "bold": True, "page_only": True},
+            ],
         ],
-        "color": None,
     },
 
     # 經文 verse slides: reference bar on top + verse body
     "scripture_verse_bar": {
         "layout":   "Blank",
-        "pos":      (Emu(0), Emu(0)),
-        "size":     (Emu(12192000), Emu(1561514)),
+        "pos":      (Emu(4080063), Emu(0)),
+        "size":     (Emu(4031873), Emu(707886)),
         "font":     "標楷體",
         "bold":     True,
-        "align":    "left",
-        "color":    None,
+        "align":    "center",
+        "color":    CYAN_SOFT,
     },
     "scripture_verse_body": {
         "pos":      (Emu(-22035), Emu(815926)),
-        "size":     (Emu(12537195), Emu(6084277)),
+        "size":     (Emu(12537195), Emu(5909310)),
         "font":     "DFKai-SB",
         "size_pt":  Pt(54),
         "bold":     True,
@@ -121,6 +126,7 @@ SLIDE_STYLES = {
         "header_ph_idx": 0,
         "body_ph_idx":   1,
         "title_size_pt": Pt(80),
+        "spacer_text":   " " * 32,
         "spacer_font":   "DFKai-SB",
         "spacer_size_pt": Pt(50),
         "spacer_bold":   True,
@@ -134,10 +140,13 @@ SLIDE_STYLES = {
         "layout":         "詩歌",
         "remove_title_ph": True,
         "body_ph_idx":    1,
+        "pos":            (Emu(0), Emu(-99152)),
+        "size":           (Emu(12192000), Emu(6957152)),
         "header_text":    "今日信息",
         "header_font":    "標楷體",
         "header_size_pt": Pt(44),
         "header_bold":    True,
+        "header_color":   CYAN_SOFT,
         "points_align":   "left",
     },
 }

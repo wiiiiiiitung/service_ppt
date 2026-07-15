@@ -189,7 +189,8 @@ def _get_reading_slides(libraries, item, input_files, override=None):
         try:
             src = Presentation(matched)
             if src.slides:
-                return [{"type": "copy_external", "prs": src, "index": i}
+                return [{"type": "copy_external", "prs": src, "index": i,
+                         "restyle": "responsive"}
                         for i in range(len(src.slides))]
         except Exception:
             pass
@@ -197,7 +198,8 @@ def _get_reading_slides(libraries, item, input_files, override=None):
     for lib in libraries:
         indices = _find_reading_slides_in_library(lib, num, title)
         if indices:
-            return [{"type": "copy_external", "prs": lib, "index": i} for i in indices]
+            return [{"type": "copy_external", "prs": lib, "index": i,
+                     "restyle": "responsive"} for i in indices]
 
     return [{"type": "hymn_placeholder", "label": f"啟應文 {num}: {title}"}]
 
@@ -308,7 +310,8 @@ def _get_sermon_slides(agenda):
     # One slide per main point
     for mp in main_points:
         heading = mp.get("heading", "")
-        points = mp.get("points", [])
+        # Tighten numbering: "1. text" → "1.text" (matches reference deck)
+        points = [re.sub(r"^(\d+)\.\s+", r"\1.", pt) for pt in mp.get("points", [])]
         groups = _group_sermon_points(heading, points)
         for i, group in enumerate(groups):
             slides.append({
@@ -321,7 +324,7 @@ def _get_sermon_slides(agenda):
     return slides
 
 
-def _group_sermon_points(heading, points, chars_per_line=22, max_lines=10):
+def _group_sermon_points(heading, points, chars_per_line=17, max_lines=7):
     """Split points into groups that fit within a single slide."""
     heading_lines = max(1, -(-len(heading) // chars_per_line)) if heading else 0
     reserved = 1 + heading_lines

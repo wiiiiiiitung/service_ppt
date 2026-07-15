@@ -59,40 +59,49 @@ def add_anthem_title_slide(out_prs, title):
 
 
 def add_scripture_title_slide(out_prs, item, bible_page=None):
-    """Scripture title slide with multi-run formatting."""
+    """Scripture title slide: centered 經文 / reference / page-hint lines."""
     style = SLIDE_STYLES.get("scripture_title", {})
     layout = get_layout(out_prs, style.get("layout", "Blank"))
     slide = out_prs.slides.add_slide(layout)
 
     pos = style.get("pos", (Emu(154746), Emu(2086708)))
-    size = style.get("size", (Emu(12037254), Emu(2000250)))
+    size = style.get("size", (Emu(12037254), Emu(3139321)))
 
     tb = slide.shapes.add_textbox(pos[0], pos[1], size[0], size[1])
     tf = tb.text_frame
     tf.word_wrap = True
-    p = tf.paragraphs[0]
 
     ref = item.get("title", "")
     testament = get_testament(ref.split()[0]) if ref else "新約"
+    align = PP_PARAGRAPH_ALIGNMENT.CENTER if style.get("align") == "center" else None
 
-    # Build multi-run paragraph from config
-    runs_config = style.get("runs", [])
-    for run_cfg in runs_config:
+    first = True
+    for line_cfg in style.get("lines", []):
         # Skip page-dependent runs when no page number provided
-        if run_cfg.get("page_only") and not bible_page:
+        runs_cfg = [rc for rc in line_cfg
+                    if not (rc.get("page_only") and not bible_page)]
+        if not runs_cfg:
             continue
 
-        text = run_cfg.get("text", "")
-        text = text.format(ref=ref, testament=testament, page=bible_page or "")
+        p = tf.paragraphs[0] if first else tf.add_paragraph()
+        first = False
+        if align is not None:
+            p.alignment = align
 
-        run = p.add_run()
-        run.text = text
-        if run_cfg.get("font"):
-            run.font.name = run_cfg["font"]
-        if run_cfg.get("size_pt"):
-            run.font.size = run_cfg["size_pt"]
-        if run_cfg.get("bold"):
-            run.font.bold = run_cfg["bold"]
+        for run_cfg in runs_cfg:
+            text = run_cfg.get("text", "")
+            text = text.format(ref=ref, testament=testament, page=bible_page or "")
+
+            run = p.add_run()
+            run.text = text
+            if run_cfg.get("font"):
+                run.font.name = run_cfg["font"]
+            if run_cfg.get("size_pt"):
+                run.font.size = run_cfg["size_pt"]
+            if run_cfg.get("bold"):
+                run.font.bold = run_cfg["bold"]
+            if run_cfg.get("color") is not None:
+                run.font.color.rgb = run_cfg["color"]
 
 
 def add_scripture_verse_slide(out_prs, ref, verses):
@@ -108,12 +117,16 @@ def add_scripture_verse_slide(out_prs, ref, verses):
     tb_ref = slide.shapes.add_textbox(bpos[0], bpos[1], bsize[0], bsize[1])
     tf_ref = tb_ref.text_frame
     p_ref = tf_ref.paragraphs[0]
-    p_ref.alignment = PP_PARAGRAPH_ALIGNMENT.LEFT
+    p_ref.alignment = (PP_PARAGRAPH_ALIGNMENT.CENTER
+                       if bar_style.get("align") == "center"
+                       else PP_PARAGRAPH_ALIGNMENT.LEFT)
     run_ref = p_ref.add_run()
     run_ref.text = ref
     run_ref.font.name = bar_style.get("font", "標楷體")
     run_ref.font.size = bar_style.get("size_pt", Pt(40))
     run_ref.font.bold = bar_style.get("bold", True)
+    if bar_style.get("color") is not None:
+        run_ref.font.color.rgb = bar_style["color"]
 
     # Verse body
     body_style = SLIDE_STYLES.get("scripture_verse_body", {})
@@ -203,7 +216,7 @@ def add_sermon_title_slide(out_prs, spec):
         # Spacer
         if preacher:
             run_sp = p_title.add_run()
-            run_sp.text = "             "
+            run_sp.text = style.get("spacer_text", "             ")
             run_sp.font.name = style.get("spacer_font", "DFKai-SB")
             run_sp.font.size = style.get("spacer_size_pt", Pt(50))
             run_sp.font.bold = style.get("spacer_bold", True)
@@ -223,8 +236,6 @@ def add_sermon_point_slide(out_prs, spec):
 
     heading = spec.get("heading", "")
     points = spec.get("points", [])
-    if spec.get("continuation") and heading and "(續)" not in heading:
-        heading = f"{heading} (續)"
 
     # Remove title placeholder
     for ph in list(slide.placeholders):
@@ -244,6 +255,12 @@ def add_sermon_point_slide(out_prs, spec):
     hdr_size = style.get("header_size_pt", Pt(44))
 
     if body_ph is not None:
+        # Reposition body to span the full slide (header sits at the very top)
+        if style.get("pos"):
+            body_ph.left, body_ph.top = style["pos"]
+        if style.get("size"):
+            body_ph.width, body_ph.height = style["size"]
+
         tf = body_ph.text_frame
         tf.clear()
 
@@ -253,6 +270,8 @@ def add_sermon_point_slide(out_prs, spec):
         run0.font.name = hdr_font
         run0.font.size = hdr_size
         run0.font.bold = True
+        if style.get("header_color") is not None:
+            run0.font.color.rgb = style["header_color"]
 
         p_heading = tf.add_paragraph()
         p_heading.alignment = PP_PARAGRAPH_ALIGNMENT.LEFT  # left

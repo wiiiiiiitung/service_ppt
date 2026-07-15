@@ -7,7 +7,7 @@ import shutil
 from pptx import Presentation
 
 from slide_finder import find_slide
-from slide_copier import copy_slide, clear_slides, get_layout
+from slide_copier import copy_slide, clear_slides, get_layout, restyle_responsive_slide
 from slide_planner import plan_slides
 from slide_generators import (
     add_placeholder_slide, add_anthem_title_slide, add_scripture_title_slide,
@@ -80,7 +80,9 @@ def _add_slide(out_prs, template, spec, agenda):
         prs = spec.get("prs")
         index = spec.get("index")
         if index is not None and prs:
-            copy_slide(out_prs, prs, index)
+            new_slide = copy_slide(out_prs, prs, index)
+            if new_slide is not None and spec.get("restyle") == "responsive":
+                restyle_responsive_slide(new_slide, out_prs.slide_width)
 
     elif stype == "blank":
         layout = get_layout(out_prs, "Blank")
