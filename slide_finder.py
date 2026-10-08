@@ -1,66 +1,92 @@
 """
-Find template slides by content marker instead of hardcoded indices.
+Find slides in the fixed-slide deck by content marker instead of by index.
 
-Replaces the old TEMPLATE_SLIDES dict with a content-based lookup that is robust
-to template edits.
+Markers must be *unambiguous*: `find_slide` returns the first match, so a
+marker that also appears in an announcement or a hymn lyric silently resolves
+to the wrong slide. `ambiguous_markers()` reports any that match more than one
+slide, and the regression harness asserts it comes back empty.
 """
 
-# Map slide semantic names to text markers that identify them in the template PPTX
+import logging
+
+logger = logging.getLogger(__name__)
+
+# Map slide semantic names to text markers identifying them in the fixed deck.
+# A None marker means "no text to match on" (the blank slide).
 SLIDE_MARKERS = {
-    "logo":            "c",  # church logo or first intro slide marker
-    "welcome":         "歡迎",
-    "blank":           None,  # blank slide (no marker)
-    "zoom_info":       "Zoom",
-    "prepare":         "安靜",
+    "logo":            None,  # church logo slide; carried by template/intro.pptx
+    "welcome":         "歡迎來到",
+    "blank":           None,
+    "zoom_info":       "華語翻譯",
+    "prepare":         "敬虔的心",
     "opening":         "開  會  詩",
     "call_to_worship": "宣  召",
     "prayer":          "祈  禱",
-    "lords_prayer_1":  "主禱文",
-    "lords_prayer_2":  "勿得導阮",  # second 主禱文 slide
-    "creed_1":         "信仰告白",
+    "lords_prayer_1":  "阮在天裡的父",
+    "lords_prayer_2":  "勿得導阮",
+    "creed_1":         "我信上帝,全能的父",
     "creed_2":         "第三日對死人中復活",
     "offering_1":      "捐得樂意",
     "offering_2":      "我的生命獻給祢",
     "communion_1":     "聖餐",
-    "communion_2":     "215",
+    "communion_2":     "耶穌身軀替咱釘死",
     "communion_3":     "與主同桌",
     "announce_title":  "報告",
-    "doxology":        "頌榮",
+    "doxology":        "榮光歸聖父上帝",
     "benediction":     "祝  禱",
     "quiet":           "默 禱",
-    "website":         "rcnewtown",
+    "website":         "今天的講台信息",
 }
+
+# Markers that legitimately appear on several slides; the first match is the
+# section title slide, which is the one we want.
+_FIRST_MATCH_OK = {"communion_1", "announce_title"}
+
+
+def _slide_texts(prs):
+    return [
+        " ".join(shape.text for shape in slide.shapes if shape.has_text_frame)
+        for slide in prs.slides
+    ]
 
 
 def find_slide(prs, key):
     """
     Find the first slide in prs whose text contains the marker for key.
 
-    Args:
-        prs: Presentation object
-        key: key in SLIDE_MARKERS
-
-    Returns:
-        0-based slide index, or None if not found
+    Returns a 0-based slide index, or None when the key is unknown, has no
+    marker, or nothing matches.
     """
-    if key not in SLIDE_MARKERS:
+    marker = SLIDE_MARKERS.get(key)
+    if not marker:
         return None
 
-    marker = SLIDE_MARKERS[key]
-    for i, slide in enumerate(prs.slides):
-        text = " ".join(
-            shape.text for shape in slide.shapes if shape.has_text_frame
+    hits = [i for i, text in enumerate(_slide_texts(prs)) if marker in text]
+    if not hits:
+        logger.warning("Fixed-slide marker %r (%s) matched no slide", marker, key)
+        return None
+    if len(hits) > 1 and key not in _FIRST_MATCH_OK:
+        logger.warning(
+            "Fixed-slide marker %r (%s) matched slides %s; using the first. "
+            "Make the marker more specific.", marker, key, hits
         )
-        if marker in text:
-            return i
-
-    return None
+    return hits[0]
 
 
-def find_consecutive(prs, keys):
+def ambiguous_markers(prs):
     """
-    Find a sequence of consecutive marker keys.
+    Report markers that match more than one slide, or none at all.
 
-    Returns list of slide indices in order (some may be None if not found).
+    Returns {key: [slide indices]} for every marker that does not resolve to
+    exactly one slide. Used by the regression harness to catch marker drift
+    when the fixed deck is replaced.
     """
-    return [find_slide(prs, k) for k in keys]
+    texts = _slide_texts(prs)
+    bad = {}
+    for key, marker in SLIDE_MARKERS.items():
+        if not marker or key in _FIRST_MATCH_OK:
+            continue
+        hits = [i for i, text in enumerate(texts) if marker in text]
+        if len(hits) != 1:
+            bad[key] = hits
+    return bad

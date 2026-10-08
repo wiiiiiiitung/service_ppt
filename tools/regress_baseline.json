@@ -1,0 +1,104 @@
+{
+  "20260802": {
+    "gen_only": 13,
+    "gen_slides": 81,
+    "overflow": 0,
+    "ref_only": 7,
+    "ref_overflow": 5,
+    "ref_slides": 75,
+    "similarity": 0.8718,
+    "unused_inputs": []
+  },
+  "20260809": {
+    "gen_only": 13,
+    "gen_slides": 84,
+    "overflow": 0,
+    "ref_only": 9,
+    "ref_overflow": 5,
+    "ref_slides": 80,
+    "similarity": 0.8659,
+    "unused_inputs": []
+  },
+  "20260816": {
+    "gen_only": 23,
+    "gen_slides": 77,
+    "overflow": 0,
+    "ref_only": 13,
+    "ref_overflow": 4,
+    "ref_slides": 67,
+    "similarity": 0.75,
+    "unused_inputs": []
+  },
+  "20260823": {
+    "gen_only": 13,
+    "gen_slides": 76,
+    "overflow": 0,
+    "ref_only": 14,
+    "ref_overflow": 7,
+    "ref_slides": 77,
+    "similarity": 0.8235,
+    "unused_inputs": []
+  },
+  "20260830": {
+    "gen_only": 13,
+    "gen_slides": 67,
+    "overflow": 0,
+    "ref_only": 24,
+    "ref_overflow": 9,
+    "ref_slides": 78,
+    "similarity": 0.7448,
+    "unused_inputs": [
+      "詩 146_v.1.pptx"
+    ]
+  },
+  "20260906": {
+    "gen_only": 14,
+    "gen_slides": 92,
+    "overflow": 0,
+    "ref_only": 6,
+    "ref_overflow": 6,
+    "ref_slides": 84,
+    "similarity": 0.8864,
+    "unused_inputs": []
+  },
+  "20260913": {
+    "gen_only": 12,
+    "gen_slides": 84,
+    "overflow": 0,
+    "ref_only": 8,
+    "ref_overflow": 2,
+    "ref_slides": 80,
+    "similarity": 0.878,
+    "unused_inputs": []
+  },
+  "20260920": {
+    "gen_only": 15,
+    "gen_slides": 82,
+    "overflow": 0,
+    "ref_only": 10,
+    "ref_overflow": 0,
+    "ref_slides": 77,
+    "similarity": 0.8428,
+    "unused_inputs": []
+  },
+  "20260927": {
+    "gen_only": 12,
+    "gen_slides": 77,
+    "overflow": 0,
+    "ref_only": 10,
+    "ref_overflow": 0,
+    "ref_slides": 75,
+    "similarity": 0.8553,
+    "unused_inputs": []
+  },
+  "20261004": {
+    "gen_only": 11,
+    "gen_slides": 81,
+    "overflow": 0,
+    "ref_only": 14,
+    "ref_overflow": 2,
+    "ref_slides": 84,
+    "similarity": 0.8485,
+    "unused_inputs": []
+  }
+}

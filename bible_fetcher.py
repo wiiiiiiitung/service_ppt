@@ -1,10 +1,14 @@
 """Fetch 和合本 (Chinese Union Version) Bible passages from bible-api.com."""
 
 import json
+import logging
 import re
 import urllib.request
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+
+logger = logging.getLogger(__name__)
 
 
 # Map abbreviations to full book names
@@ -33,17 +37,21 @@ def parse_reference(ref):
         "尼希米記13:15~22" → ("尼希米記", 13, 15, 22)
         "羅馬書 4:1~12"    → ("羅馬書", 4, 1, 12)
         "詩篇 23:1"        → ("詩篇", 23, 1, 1)
+        "詩篇 90"          → ("詩篇", 90, None, None)   whole chapter
+
+    A chapter-only reference used to return None, which meant the online
+    lookup never ran for those weeks and the planner fell through to a library
+    search that matched on book name alone — inserting an unrelated 啟應文
+    reading where the sermon text belonged.
 
     Returns (book, chapter, verse_start, verse_end) or None if unparseable.
+    A verse range of (None, None) means the whole chapter.
     """
     ref = ref.strip()
-    # Replace full-width colons and tildes
+    # Normalise full-width colons, tildes and dashes.
     ref = ref.replace("：", ":").replace("～", "~").replace("〜", "~").replace("－", "-")
 
-    m = re.match(
-        r"^([^\d]+?)\s*(\d+)\s*[:：]\s*(\d+)\s*[~\-～]\s*(\d+)",
-        ref
-    )
+    m = re.match(r"^([^\d]+?)\s*(\d+)\s*[:：]\s*(\d+)\s*[~\-～]\s*(\d+)", ref)
     if m:
         return m.group(1).strip(), int(m.group(2)), int(m.group(3)), int(m.group(4))
 
@@ -51,6 +59,11 @@ def parse_reference(ref):
     if m:
         v = int(m.group(3))
         return m.group(1).strip(), int(m.group(2)), v, v
+
+    # Chapter only: "詩篇 90", "詩篇146"
+    m = re.match(r"^([^\d]+?)\s*(\d+)\s*$", ref)
+    if m:
+        return m.group(1).strip(), int(m.group(2)), None, None
 
     return None
 
@@ -68,7 +81,8 @@ def _do_fetch(url):
             data = json.loads(resp.read())
         verses = data.get("verses", [])
         return [{"verse": v["verse"], "text": v["text"].strip()} for v in verses]
-    except Exception:
+    except Exception as e:
+        logger.warning("Bible fetch failed for %s: %s", url, e)
         return None
 
 
@@ -85,7 +99,10 @@ def fetch_verses(ref, timeout=5):
     book, chapter, v_start, v_end = parsed
     book_name = _BOOK_ALIASES.get(book, book)
 
-    query = f"{book_name}{chapter}:{v_start}-{v_end}"
+    if v_start is None:
+        query = f"{book_name}{chapter}"
+    else:
+        query = f"{book_name}{chapter}:{v_start}-{v_end}"
     url = f"{API_BASE}/{urllib.parse.quote(query)}?translation=cuv"
 
     with ThreadPoolExecutor(max_workers=1) as pool:
@@ -94,30 +111,3 @@ def fetch_verses(ref, timeout=5):
             return future.result(timeout=timeout)
         except (FuturesTimeout, Exception):
             return None
-
-
-def group_verses_for_slides(verses, chars_per_line=18, max_lines=7):
-    """
-    Group verses into slide-sized chunks.
-
-    Each group contains verses that fit within max_lines lines of chars_per_line
-    characters each.
-    """
-    groups = []
-    current = []
-    current_lines = 0
-
-    for v in verses:
-        verse_lines = max(1, -(-len(v["text"]) // chars_per_line))  # ceil division
-        if current and current_lines + verse_lines >= max_lines:
-            groups.append(current)
-            current = [v]
-            current_lines = verse_lines
-        else:
-            current.append(v)
-            current_lines += verse_lines
-
-    if current:
-        groups.append(current)
-
-    return groups

@@ -2,31 +2,45 @@
 Slide planning logic: translate agenda + input files → ordered list of slide specs.
 
 Determines what slides should be created and in what order, before generation.
+Specs that copy an input deck carry `source_file`, so `unused_inputs()` can
+report an uploaded file that nothing consumed — a guest preacher's sermon deck
+used to be dropped in silence.
 """
 
+import logging
 import os
 import re
-from pptx import Presentation
+
 from docx import Document
+from pptx import Presentation
 
-from bible_fetcher import fetch_verses, group_verses_for_slides
-from slide_finder import find_slide, find_consecutive
+import bible_pages
+from bible_fetcher import fetch_verses
+from service_config import SLIDE_STYLES
+from slide_finder import find_slide
+from text_layout import capacity, pack_lines, wrap_text
+
+logger = logging.getLogger(__name__)
+
+_UNSET = object()
 
 
-def plan_slides(template, libraries, agenda, input_files, skip_intro=False, bible_page=None, overrides=None):
+def plan_slides(fixed_deck, libraries, agenda, input_files, skip_intro=False,
+                bible_page=None, overrides=None):
     """
     Build the ordered list of slide specs for the service.
 
     Args:
-        template: Template Presentation (for fixed content lookup)
+        fixed_deck: Presentation holding the recurring service slides
         libraries: List of library Presentations
         agenda: Parsed agenda dict with worship_order, sermon_outline, announcements
         input_files: Dict of filename → filepath
         skip_intro: If True, don't add intro slides (they come from intro PPTX)
-        bible_page: Page number for scripture title (user input)
+        bible_page: Page number for the 經文 title. None falls back to
+            bible_pages.lookup(); only a value the operator typed wins over it.
         overrides: Optional dict of item_id → filename (from input_files) to
-            force a specific file. Use empty string to force "no file" (library/
-            placeholder fallback). Item ids match those from plan_match_items().
+            force a specific file. Use empty string to force "no file"
+            (library/placeholder fallback). Ids match plan_match_items().
 
     Returns:
         List of slide spec dicts describing what to create
@@ -34,153 +48,135 @@ def plan_slides(template, libraries, agenda, input_files, skip_intro=False, bibl
     order = agenda.get("worship_order", [])
     slides = []
     overrides = overrides or {}
-    hymn_idx = 0
-    reading_idx = 0
-    anthem_idx = 0
+    hymn_idx = reading_idx = anthem_idx = 0
 
     # === Fixed pre-worship slides ===
     if not skip_intro:
-        # Intro: copy slides up to (but not including) call_to_worship
-        call_to_worship_idx = find_slide(template, "call_to_worship")
+        call_to_worship_idx = find_slide(fixed_deck, "call_to_worship")
         if call_to_worship_idx is None:
             call_to_worship_idx = 6  # fallback
-
         for i in range(call_to_worship_idx):
-            slides.append({"type": "copy_template", "prs": template, "index": i})
+            slides.append({"type": "copy_template", "prs": fixed_deck, "index": i})
+
+    def copy_fixed(*keys):
+        for key in keys:
+            idx = find_slide(fixed_deck, key)
+            if idx is not None:
+                slides.append({"type": "copy_template", "prs": fixed_deck, "index": idx})
 
     # === Worship order items ===
-    for item in order:
+    for pos, item in enumerate(order):
         itype = item.get("type")
+        next_type = order[pos + 1].get("type") if pos + 1 < len(order) else None
 
         if itype == "call_to_worship":
-            idx = find_slide(template, "call_to_worship")
-            if idx is not None:
-                slides.append({"type": "copy_template", "prs": template, "index": idx})
+            copy_fixed("call_to_worship")
             slides.append({"type": "blank"})
 
         elif itype == "hymn":
-            hymn_slides = _get_hymn_slides(
+            slides.extend(_get_hymn_slides(
                 libraries, item, input_files,
-                override=overrides.get(f"hymn-{hymn_idx}"),
-            )
+                override=overrides.get(f"hymn-{hymn_idx}")))
             hymn_idx += 1
-            slides.extend(hymn_slides)
             slides.append({"type": "blank"})
 
         elif itype == "prayer":
-            for key in ["prayer", "lords_prayer_1", "lords_prayer_2"]:
-                idx = find_slide(template, key)
-                if idx is not None:
-                    slides.append({"type": "copy_template", "prs": template, "index": idx})
+            copy_fixed("prayer", "lords_prayer_1", "lords_prayer_2")
 
         elif itype == "creed":
-            for key in ["creed_1", "creed_2"]:
-                idx = find_slide(template, key)
-                if idx is not None:
-                    slides.append({"type": "copy_template", "prs": template, "index": idx})
+            copy_fixed("creed_1", "creed_2")
             slides.append({"type": "blank"})
 
         elif itype == "responsive":
-            reading_slides = _get_reading_slides(
+            slides.extend(_get_reading_slides(
                 libraries, item, input_files,
-                override=overrides.get(f"reading-{reading_idx}"),
-            )
+                override=overrides.get(f"reading-{reading_idx}")))
             reading_idx += 1
-            slides.extend(reading_slides)
             slides.append({"type": "blank"})
 
         elif itype == "anthem":
-            anthem_slides = _get_anthem_slides(
+            slides.extend(_get_anthem_slides(
                 libraries, item, input_files,
-                override=overrides.get(f"anthem-{anthem_idx}"),
-            )
+                override=overrides.get(f"anthem-{anthem_idx}")))
             anthem_idx += 1
-            slides.extend(anthem_slides)
             slides.append({"type": "blank"})
 
         elif itype == "scripture":
-            scripture_slides = _get_scripture_slides(libraries, item, bible_page)
-            slides.extend(scripture_slides)
+            slides.extend(_get_scripture_slides(item, bible_page))
             # No blank between scripture and sermon
 
         elif itype == "sermon":
-            sermon_slides = _get_sermon_slides(agenda)
-            slides.extend(sermon_slides)
+            slides.extend(_get_sermon_slides(
+                agenda, input_files, override=overrides.get("sermon-0")))
             slides.append({"type": "blank"})
 
         elif itype == "offering":
-            for key in ["offering_1", "offering_2"]:
-                idx = find_slide(template, key)
-                if idx is not None:
-                    slides.append({"type": "copy_template", "prs": template, "index": idx})
-            slides.append({"type": "blank"})
+            copy_fixed("offering_1", "offering_2")
+            # On communion Sundays the offering runs straight into 聖餐 with no
+            # divider, the way the reference decks do it.
+            if next_type != "communion":
+                slides.append({"type": "blank"})
 
         elif itype == "communion":
-            # Only include if 聖餐 is in the agenda
-            for key in ["communion_1", "communion_2", "communion_3"]:
-                idx = find_slide(template, key)
-                if idx is not None:
-                    slides.append({"type": "copy_template", "prs": template, "index": idx})
+            _warn_on_fixed_mismatch(fixed_deck, item)
+            copy_fixed("communion_1", "communion_2", "communion_3")
             slides.append({"type": "blank"})
 
         elif itype == "announcements":
             ann_slides = _get_announcement_slides(agenda)
             if ann_slides:
-                idx = find_slide(template, "announce_title")
-                if idx is not None:
-                    slides.append({"type": "copy_template", "prs": template, "index": idx})
+                copy_fixed("announce_title")
                 slides.extend(ann_slides)
                 slides.append({"type": "blank"})
 
-        elif itype == "doxology":
-            # Skip—handled in closing section below
-            pass
-
-        elif itype == "benediction":
-            # Skip—handled in closing section below
-            pass
+        elif itype in ("doxology", "benediction"):
+            pass  # handled in the closing section below
 
     # === Fixed closing slides ===
-    for key in ["doxology", "benediction", "quiet", "website"]:
-        idx = find_slide(template, key)
-        if idx is not None:
-            slides.append({"type": "copy_template", "prs": template, "index": idx})
+    copy_fixed("doxology", "benediction", "quiet", "website")
 
     return slides
 
 
-def _get_hymn_slides(libraries, item, input_files, is_doxology=False, override=None):
-    """Get slides for a hymn item, from input file or slide library."""
+def _warn_on_fixed_mismatch(fixed_deck, item):
+    """Warn when the agenda's communion hymn isn't the one in the fixed deck."""
+    num = item.get("number")
+    if not num:
+        return
+    idx = find_slide(fixed_deck, "communion_2")
+    if idx is None:
+        return
+    text = _slide_text(fixed_deck.slides[idx])
+    if num not in text:
+        logger.warning(
+            "Agenda asks for 聖餐 hymn %s but template/fixed.pptx has %r; "
+            "using the template slide.", num, text[:40])
+
+
+def unused_inputs(slides_spec, input_files):
+    """
+    Input files that no planned slide consumed.
+
+    An unmatched PPTX is usually a guest preacher's own deck, which has no
+    agenda line to match against; surfacing it lets the operator attach it
+    rather than discover the gap during the service.
+    """
+    used = {os.path.basename(s["source_file"])
+            for s in slides_spec if s.get("source_file")}
+    return sorted(name for name in input_files if name not in used)
+
+
+# ── External deck resolution ─────────────────────────────────────────────────
+
+def _get_external_slides(libraries, item, input_files, find_fn, override=None,
+                         restyle=None, placeholder_label=""):
+    """
+    Shared resolution flow for hymn/reading items: try a matched input PPTX,
+    then search libraries via find_fn, then fall back to a placeholder.
+    """
     num = item.get("number")
     title = item.get("title", "")
-
-    # Try readable input file (PPTX only)
-    matched = _resolve_input(override, input_files, [".pptx"])
-    if matched is _UNSET:
-        matched = _match_file(num, title, input_files, [".pptx"])
-    if matched:
-        try:
-            src = Presentation(matched)
-            if src.slides:
-                return [{"type": "copy_external", "prs": src, "index": i}
-                        for i in range(len(src.slides))]
-        except Exception:
-            pass
-
-    # Search all libraries
-    for lib in libraries:
-        indices = _find_hymn_slides_in_library(lib, num, title)
-        if indices:
-            return [{"type": "copy_external", "prs": lib, "index": i} for i in indices]
-
-    label = f"{'頌榮' if is_doxology else '聖詩'} {num}: {title}" if num else title
-    return [{"type": "hymn_placeholder", "label": label}]
-
-
-def _get_reading_slides(libraries, item, input_files, override=None):
-    """Get slides for the responsive reading."""
-    num = item.get("number")
-    title = item.get("title", "")
+    extra = {"restyle": restyle} if restyle else {}
 
     matched = _resolve_input(override, input_files, [".pptx"])
     if matched is _UNSET:
@@ -190,18 +186,40 @@ def _get_reading_slides(libraries, item, input_files, override=None):
             src = Presentation(matched)
             if src.slides:
                 return [{"type": "copy_external", "prs": src, "index": i,
-                         "restyle": "responsive"}
+                         "source_file": matched, **extra}
                         for i in range(len(src.slides))]
         except Exception:
-            pass
+            logger.exception("Failed to load matched input PPTX %s; falling back "
+                             "to library search", matched)
 
     for lib in libraries:
-        indices = _find_reading_slides_in_library(lib, num, title)
+        indices = find_fn(lib, num, title)
         if indices:
-            return [{"type": "copy_external", "prs": lib, "index": i,
-                     "restyle": "responsive"} for i in indices]
+            return [{"type": "copy_external", "prs": lib, "index": i, **extra}
+                    for i in indices]
 
-    return [{"type": "hymn_placeholder", "label": f"啟應文 {num}: {title}"}]
+    return [{"type": "hymn_placeholder", "label": placeholder_label}]
+
+
+def _get_hymn_slides(libraries, item, input_files, is_doxology=False, override=None):
+    """Get slides for a hymn item, from input file or slide library."""
+    num = item.get("number")
+    title = item.get("title", "")
+    label = f"{'頌榮' if is_doxology else '聖詩'} {num}: {title}" if num else title
+    return _get_external_slides(libraries, item, input_files,
+                                _find_hymn_slides_in_library,
+                                override=override, placeholder_label=label)
+
+
+def _get_reading_slides(libraries, item, input_files, override=None):
+    """Get slides for the responsive reading."""
+    num = item.get("number")
+    title = item.get("title", "")
+    label = f"啟應文 {num}: {title}"
+    return _get_external_slides(libraries, item, input_files,
+                                _find_reading_slides_in_library,
+                                override=override, restyle="responsive",
+                                placeholder_label=label)
 
 
 def _get_anthem_slides(libraries, item, input_files, override=None):
@@ -209,14 +227,12 @@ def _get_anthem_slides(libraries, item, input_files, override=None):
     title = item.get("title", "")
     slides = [{"type": "anthem_title", "title": title}]
 
-    # Try DOCX for lyrics
     matched = _resolve_input(override, input_files, [".docx", ".doc"])
     if matched is _UNSET:
         matched = _match_file(None, title, input_files, [".docx", ".doc"])
     if matched:
         try:
             lyrics = _parse_docx_lyrics(matched)
-            # Skip only the first title paragraph; keep duplicates as lyrics
             clean_title = re.sub(r"\s+", "", title)
             verses = []
             title_seen = False
@@ -226,94 +242,165 @@ def _get_anthem_slides(libraries, item, input_files, override=None):
                     continue
                 verses.append(v)
             if verses:
-                for chunk in _group_anthem_verses(verses, max_lines=6):
-                    slides.append({"type": "anthem_lyrics", "title": title, "lyrics": chunk})
+                for chunk in _group_anthem_verses(verses):
+                    slides.append({"type": "anthem_lyrics", "title": title,
+                                   "lines": chunk, "source_file": matched})
                 return slides
         except Exception:
-            pass
+            logger.exception("Failed to parse anthem lyrics from %s; falling back "
+                             "to library search", matched)
 
-    # Search libraries for anthem slides
     for lib in libraries:
         indices = _find_anthem_slides_in_library(lib, title)
         if indices:
-            content_indices = [i for i in indices if i != indices[0]]
-            if not content_indices:
-                content_indices = indices
+            content_indices = [i for i in indices if i != indices[0]] or indices
             return [{"type": "anthem_title", "title": title}] + \
-                   [{"type": "copy_external", "prs": lib, "index": i} for i in content_indices]
+                   [{"type": "copy_external", "prs": lib, "index": i}
+                    for i in content_indices]
 
     return slides
 
 
-def _group_anthem_verses(verses, max_lines=6):
+def _group_anthem_verses(verses):
     """
-    Pack verses into slide-sized chunks of exactly max_lines lines.
+    Pack lyric lines into slide-sized chunks using the measured 詩歌 body
+    capacity (6 lines at 54pt, not the 7 a 1.2 line-height would suggest —
+    that off-by-one is what pushed the last line of each slide off the bottom).
 
-    Flattens paragraph boundaries — splits across paragraphs when needed
-    so each slide gets a full max_lines count (last slide may have fewer).
+    Returns a list of line-lists.
     """
+    style = SLIDE_STYLES["lyrics"]
+    cols, max_lines = capacity(style["box"], style["size_pt"])
+
     all_lines = []
     for v in verses:
-        all_lines.extend(v.split("\n"))
+        for line in v.split("\n"):
+            if line.strip():
+                all_lines.append(line)
 
+    # A lyric line longer than the box still has to wrap; count it honestly.
+    expanded = []
+    for line in all_lines:
+        expanded.extend(wrap_text(line, cols))
+    return pack_lines(expanded, max_lines)
+
+
+# ── Scripture ────────────────────────────────────────────────────────────────
+
+def _get_scripture_slides(item, bible_page=None):
+    """
+    Build the 經文 title slide plus verse slides.
+
+    The library fallback this used to have searched on book name alone, so a
+    reference like "詩篇 90" matched any slide containing 詩篇 and pulled in a
+    完全 unrelated 啟應文 reading. There is no safe way to recover verse text
+    from the library, so when the online lookup fails this now emits the title
+    slide only and says so in the log.
+    """
+    ref = item.get("title", "")
+    page = bible_page if bible_page not in (None, "") else bible_pages.lookup(ref)
+    slides = [{"type": "scripture_title", "item": item, "bible_page": page}]
+
+    verses = fetch_verses(ref)
+    if not verses:
+        logger.warning("No verse text for %r; emitting the 經文 title slide only. "
+                       "Add the passage manually or retry with network access.", ref)
+        return slides
+
+    style = SLIDE_STYLES["scripture_verse_body"]
+    cols, max_lines = capacity(style["size"], style["size_pt"])
+
+    for group in _group_verses(verses, cols, max_lines):
+        slides.append({"type": "scripture_verses", "ref": ref, "verses": group})
+    return slides
+
+
+def _group_verses(verses, cols, max_lines):
+    """
+    Group verses onto slides by their *wrapped* line count.
+
+    Each verse is laid out as "25.<text>" with continuation lines indented to
+    clear the number, so the line count is computed from the formatted text,
+    not the raw verse. Each verse after the first also costs ~0.2 of a line in
+    paragraph spacing (the master sets spcBef to 20%).
+    """
     groups = []
-    for i in range(0, len(all_lines), max_lines):
-        groups.append("\n".join(all_lines[i:i + max_lines]))
+    current = []
+    current_cost = 0.0
+
+    for v in verses:
+        lines = _verse_lines(v, cols)
+        cost = len(lines) + (0.2 if current else 0.0)
+        if current and current_cost + cost > max_lines:
+            groups.append(current)
+            current = []
+            current_cost = 0.0
+            cost = len(lines)
+        current.append(dict(v, lines=lines))
+        current_cost += cost
+
+    if current:
+        groups.append(current)
     return groups
 
 
-def _get_scripture_slides(libraries, item, bible_page=None):
-    """Get scripture slides from bible-api, libraries, or as title-only fallback."""
-    ref = item.get("title", "")
-
-    # Try fetching from 和合本 online
-    verses = fetch_verses(ref)
-    if verses:
-        slides = [{"type": "scripture_title", "item": item, "bible_page": bible_page}]
-        for group in group_verses_for_slides(verses):
-            slides.append({"type": "scripture_verses", "ref": ref, "verses": group})
-        return slides
-
-    # Search libraries
-    for lib in libraries:
-        indices = _find_scripture_slides_in_library(lib, ref)
-        if indices and len(indices) > 1:
-            return [{"type": "copy_external", "prs": lib, "index": i} for i in indices]
-
-    return [{"type": "scripture_title", "item": item, "bible_page": bible_page}]
+def _verse_lines(verse, cols):
+    """Wrapped lines for one verse, with continuation lines indented."""
+    prefix = f"{verse['verse']}."
+    indent = " " * (len(prefix) + 1)
+    return wrap_text(prefix + verse["text"], cols, indent=indent)
 
 
-def _get_sermon_slides(agenda):
-    """Build sermon outline slides from the parsed agenda."""
+# ── Sermon ───────────────────────────────────────────────────────────────────
+
+def _get_sermon_slides(agenda, input_files=None, override=None):
+    """
+    Build sermon slides.
+
+    Normally the outline from the agenda's 講台綱要 page. When the operator
+    attaches a preacher's own deck (overrides["sermon-0"]), its slides are
+    copied in after the title slide instead — some guest preachers supply a
+    full deck that has no agenda line to match on.
+    """
     outline = agenda.get("sermon_outline", {})
     title = outline.get("title", "")
     scripture = outline.get("scripture", "")
     main_points = outline.get("main_points", [])
-    preacher = ""
 
-    # Get preacher from worship order
+    preacher = ""
     for item in agenda.get("worship_order", []):
         if item.get("type") == "sermon":
             preacher = item.get("presenter", "")
             break
 
-    slides = []
-
-    # Title slide with sermon title + preacher
-    slides.append({
+    slides = [{
         "type": "sermon_title",
         "title": title,
         "preacher": preacher,
         "scripture": f"《{scripture}》" if scripture else "",
-    })
+    }]
 
-    # One slide per main point
+    attached = _resolve_input(override, input_files or {}, [".pptx"])
+    if attached not in (_UNSET, None):
+        try:
+            src = Presentation(attached)
+            if src.slides:
+                slides.extend({"type": "copy_external", "prs": src, "index": i,
+                               "source_file": attached}
+                              for i in range(len(src.slides)))
+                return slides
+        except Exception:
+            logger.exception("Failed to load sermon deck %s; falling back to the "
+                             "agenda outline", attached)
+
+    style = SLIDE_STYLES["sermon_point"]
+    cols, max_lines = capacity(style["box"], style["size_pt"])
+
     for mp in main_points:
         heading = mp.get("heading", "")
         # Tighten numbering: "1. text" → "1.text" (matches reference deck)
         points = [re.sub(r"^(\d+)\.\s+", r"\1.", pt) for pt in mp.get("points", [])]
-        groups = _group_sermon_points(heading, points)
-        for i, group in enumerate(groups):
+        for i, group in enumerate(_group_sermon_points(heading, points, cols, max_lines)):
             slides.append({
                 "type": "sermon_point",
                 "heading": heading,
@@ -324,35 +411,48 @@ def _get_sermon_slides(agenda):
     return slides
 
 
-def _group_sermon_points(heading, points, chars_per_line=17, max_lines=7):
-    """Split points into groups that fit within a single slide."""
-    heading_lines = max(1, -(-len(heading) // chars_per_line)) if heading else 0
-    reserved = 1 + heading_lines
-    budget = max(1, max_lines - reserved)
+def _group_sermon_points(heading, points, cols, max_lines):
+    """
+    Split a main point's sub-points into slides that actually fit.
+
+    Budget: the whole box, minus the 今日信息 header line, minus the heading
+    (which repeats on continuation slides). Everything is measured in wrapped
+    lines at the real box width.
+    """
+    header_lines = 1
+    heading_lines = len(wrap_text(heading, cols)) if heading else 0
+    budget = max(1, max_lines - header_lines - heading_lines)
 
     groups = []
     current = []
     current_lines = 0
     for pt in points:
-        pt_lines = max(1, -(-len(pt) // chars_per_line))
-        if current and current_lines + pt_lines > budget:
+        n = len(wrap_text(pt, cols))
+        if current and current_lines + n > budget:
             groups.append(current)
-            current = [pt]
-            current_lines = pt_lines
-        else:
-            current.append(pt)
-            current_lines += pt_lines
+            current = []
+            current_lines = 0
+        current.append(pt)
+        current_lines += n
     if current:
         groups.append(current)
     return groups or [[]]
 
 
-def _get_announcement_slides(agenda):
-    """Build announcement slides — 1 item per slide."""
-    announcements = agenda.get("announcements", {})
-    slides = []
+# ── Announcements ────────────────────────────────────────────────────────────
 
-    for section, items in announcements.items():
+def _get_announcement_slides(agenda):
+    """
+    One slide per announcement item.
+
+    Long items used to be chopped at a fixed character count, which produced
+    tail slides holding a fragment ("報告：台語部 -8656。") and cut through
+    English names mid-word. Instead the item stays whole and the generator
+    steps the font size down until it fits, which is what the reference decks
+    do by hand.
+    """
+    slides = []
+    for section, items in agenda.get("announcements", {}).items():
         section_label = f"報告： {section}"
         for item in items:
             slides.append({
@@ -360,12 +460,10 @@ def _get_announcement_slides(agenda):
                 "section": section_label,
                 "text": item,
             })
-
     return slides
 
 
-_UNSET = object()
-
+# ── Input file matching ──────────────────────────────────────────────────────
 
 def _resolve_input(override, input_files, extensions):
     """
@@ -388,20 +486,24 @@ def _resolve_input(override, input_files, extensions):
 
 
 def _match_file(number, title, input_files, extensions):
-    """Find an input file matching a hymn number or title."""
-    # First pass: strict number-prefix or whole-string substring (existing behavior)
+    """
+    Find an input file matching a hymn number or title.
+
+    `number` is a string and may carry a letter suffix ("254A"), so it is
+    regex-escaped rather than interpolated raw.
+    """
+    num = str(number) if number not in (None, "") else None
+    num_pat = re.escape(num) if num else None
+
+    # First pass: number prefix, or whole-string title containment.
     for fname, fpath in input_files.items():
         ext = os.path.splitext(fname)[1].lower()
         if ext not in extensions:
             continue
-        base = os.path.splitext(fname)[0]
+        base = os.path.splitext(fname)[0].strip()
 
-        if number is not None:
-            patterns = [
-                rf"^0*{number}[-_\s]",
-                rf"^0*{number}$",
-            ]
-            for pat in patterns:
+        if num_pat:
+            for pat in (rf"^0*{num_pat}[-_\s]", rf"^0*{num_pat}$"):
                 if re.match(pat, base, re.IGNORECASE):
                     return fpath
 
@@ -411,22 +513,22 @@ def _match_file(number, title, input_files, extensions):
             if clean_title and (clean_title in clean_base or clean_base in clean_title):
                 return fpath
 
-    # Second pass: looser fallback — number anywhere with non-digit boundary,
-    # or fuzzy title (≥60% char overlap)
+    # Second pass: number anywhere with a non-digit boundary, or fuzzy title.
     best = None
     best_score = 0.0
     for fname, fpath in input_files.items():
         ext = os.path.splitext(fname)[1].lower()
         if ext not in extensions:
             continue
-        base = os.path.splitext(fname)[0]
+        base = os.path.splitext(fname)[0].strip()
 
-        if number is not None and re.search(rf"(?<!\d)0*{number}(?!\d)", base):
+        if num_pat and re.search(rf"(?<!\d)0*{num_pat}(?![0-9A-Za-z])", base,
+                                 re.IGNORECASE):
             return fpath
 
         if title:
-            clean_title = re.sub(r"[\s\-_().\[\]【】《》]", "", title)
-            clean_base = re.sub(r"[\s\-_().\[\]【】《》]", "", base)
+            clean_title = re.sub(r"[\s\-_().\[\]【】《》，,]", "", title)
+            clean_base = re.sub(r"[\s\-_().\[\]【】《》，,]", "", base)
             if clean_title:
                 shared = sum(1 for ch in clean_title if ch in clean_base)
                 score = shared / len(clean_title)
@@ -443,7 +545,8 @@ def plan_match_items(agenda, input_files):
     results and candidate files for each.
 
     Item ids are stable for a given agenda order: hymn-0, hymn-1, reading-0,
-    anthem-0, etc. They line up with the overrides keys consumed by plan_slides.
+    anthem-0, sermon-0. They line up with the overrides keys consumed by
+    plan_slides().
     """
     pptx_candidates = sorted(
         fname for fname in input_files
@@ -460,6 +563,7 @@ def plan_match_items(agenda, input_files):
         itype = entry.get("type")
         num = entry.get("number")
         title = entry.get("title", "")
+
         if itype == "hymn":
             matched = _match_file(num, title, input_files, [".pptx"])
             items.append({
@@ -490,23 +594,34 @@ def plan_match_items(agenda, input_files):
                 "candidates": docx_candidates,
             })
             anthem_idx += 1
+        elif itype == "sermon":
+            # Never auto-matched: a preacher's deck is named after the passage,
+            # not the sermon title. Offered so it can be attached by hand.
+            items.append({
+                "id": "sermon-0",
+                "kind": "sermon",
+                "label": f"證道: {title}（可選：講道投影片）",
+                "matched_file": None,
+                "candidates": pptx_candidates,
+            })
     return items
 
 
+# ── Library search ───────────────────────────────────────────────────────────
+
 def _find_hymn_slides_in_library(prs, number, title):
     """Find hymn slides in a presentation by number prefix or title."""
+    num_pat = re.escape(str(number)) if number not in (None, "") else None
     seen = set()
     for i, slide in enumerate(prs.slides):
         text = _slide_text(slide)
-        if number and re.search(rf"{number}\s*[：:]", text):
+        if num_pat and re.search(rf"(?<!\d){num_pat}\s*[：:]", text):
             seen.add(i)
             continue
-        if title and number is None:
-            clean_title = re.sub(r"\s+", "", title)
-            if clean_title in re.sub(r"\s+", "", text):
+        if title and not num_pat:
+            if re.sub(r"\s+", "", title) in re.sub(r"\s+", "", text):
                 seen.add(i)
 
-    # Fall back to title search if number search found nothing
     if not seen and title:
         clean_title = re.sub(r"\s+", "", title)
         for i, slide in enumerate(prs.slides):
@@ -518,13 +633,14 @@ def _find_hymn_slides_in_library(prs, number, title):
 
 def _find_reading_slides_in_library(prs, number, title):
     """Find responsive reading slides in a presentation."""
+    num_pat = re.escape(str(number)) if number not in (None, "") else None
     seen = set()
     for i, slide in enumerate(prs.slides):
         text = _slide_text(slide)
-        if number and re.search(rf"啟應文\s*{number}", text):
+        if num_pat and re.search(rf"啟應文\s*{num_pat}(?!\d)", text):
             seen.add(i)
             continue
-        if title and not number:
+        if title and not num_pat:
             if re.sub(r"\s+", "", title) in re.sub(r"\s+", "", text):
                 seen.add(i)
     return sorted(seen) or None
@@ -534,33 +650,18 @@ def _find_anthem_slides_in_library(prs, title):
     """Find anthem slides in a presentation by title text."""
     seen = set()
     clean = re.sub(r"\s+", "", title)
+    if not clean:
+        return None
     for i, slide in enumerate(prs.slides):
         if clean in re.sub(r"\s+", "", _slide_text(slide)):
             seen.add(i)
     return sorted(seen) or None
 
 
-def _find_scripture_slides_in_library(prs, ref):
-    """Find scripture slides by book name / reference."""
-    seen = set()
-    book = re.split(r"\s*\d", ref)[0].strip()
-    clean_book = re.sub(r"\s+", "", book)
-    if len(clean_book) < 2:
-        return None
-    for i, slide in enumerate(prs.slides):
-        clean_text = re.sub(r"\s+", "", _slide_text(slide))
-        if clean_book in clean_text:
-            seen.add(i)
-    return sorted(seen) or None
-
-
 def _slide_text(slide):
     """Extract all text from a slide."""
-    texts = []
-    for shape in slide.shapes:
-        if shape.has_text_frame:
-            texts.append(shape.text_frame.text)
-    return " ".join(texts)
+    return " ".join(shape.text_frame.text for shape in slide.shapes
+                    if shape.has_text_frame)
 
 
 def _parse_docx_lyrics(docx_path):
