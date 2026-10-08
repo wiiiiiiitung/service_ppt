@@ -1,39 +1,40 @@
 """
 Service worship PPTX generation configuration.
 
-Defines the section order (SECTIONS) and all slide styles/positions/fonts (SLIDE_STYLES).
-This is the single source of truth for the entire PPTX structure.
+Defines all slide styles/positions/fonts (SLIDE_STYLES) for generated slides.
+Section ordering lives in slide_planner.plan_slides().
+
+Every style that holds flowing text carries a `box` (and, where it differs from
+the master default, an `inset` and `line_height`) so text_layout can work out
+how much actually fits instead of relying on hard-coded line counts. The boxes
+below are measured from the 詩歌 layout in template/intro.pptx.
 """
 
 from pptx.util import Emu, Pt
 
 from styles import CYAN_SOFT, YELLOW
 
-# ── Worship service section sequence ──────────────────────────────────────────
-# Each entry describes one block of slides in the output PPTX.
-# Types:
-#   "fixed"      → copy slides from template by text marker
-#   "from_input" → copy all slides from the matched input PPTX as-is
-#   "generated"  → build slides programmatically using SLIDE_STYLES
+# ── Text-cleanup toggles ────────────────────────────────────────────────────
+# Church bulletin PDFs are justified, so pdfplumber extracts spurious spaces at
+# line-wrap points in Chinese text. Collapse whitespace that sits between two
+# CJK characters on announcement slides. Spaces bordering Latin text (URLs,
+# phone numbers, "會號 994 2970 4298") are preserved — the reference decks keep
+# them. Set to False to keep the raw PDF-extracted spacing.
+ANNOUNCEMENT_STRIP_CJK_SPACES = True
 
-SECTIONS = [
-    {"id": "intro",           "type": "fixed",      "markers": ["歡迎","Zoom","安靜","開  會  詩"], "count": 6},
-    {"id": "call_to_worship", "type": "fixed",      "markers": ["宣  召"],    "after_blank": True},
-    {"id": "hymn_1",          "type": "from_input", "agenda_type": "hymn",       "after_blank": True},
-    {"id": "prayer_block",    "type": "fixed",      "markers": ["祈  禱","主禱文","信仰告白"], "after_blank": True},
-    {"id": "responsive",      "type": "from_input", "agenda_type": "responsive", "after_blank": True},
-    {"id": "anthem",          "type": "generated",  "agenda_type": "anthem",     "after_blank": True},
-    {"id": "scripture",       "type": "generated",  "agenda_type": "scripture",  "after_blank": False},
-    {"id": "sermon",          "type": "generated",  "agenda_type": "sermon",     "after_blank": True},
-    {"id": "hymn_2",          "type": "from_input", "agenda_type": "hymn",       "after_blank": True},
-    {"id": "offering",        "type": "fixed",      "markers": ["奉獻"],         "after_blank": False},
-    {"id": "communion",       "type": "fixed",      "markers": ["聖餐"],         "conditional": "communion_in_agenda", "after_blank": True},
-    {"id": "announcements",   "type": "generated",  "agenda_type": "announcements", "after_blank": True},
-    {"id": "closing",         "type": "fixed",      "markers": ["頌榮","祝  禱","默 禱","rcnewtown"]},
-]
+# ── Measured layout geometry ────────────────────────────────────────────────
+# The 詩歌 layout's body placeholder, which every lyric / sermon / announcement
+# slide uses. 914400 EMU = 1 inch.
+SONG_BODY_POS = (Emu(0), Emu(990600))
+SONG_BODY_BOX = (Emu(12192000), Emu(5867400))
+# Master text-box insets: lIns/rIns 0.1in, tIns/bIns 0.05in.
+BODY_INSET = (Emu(91440), Emu(45720))
+
+# Font sizes an over-long announcement may be stepped down through, standing in
+# for the shrink-on-overflow autofit these decks don't enable.
+ANNOUNCEMENT_SIZE_LADDER = [Pt(54), Pt(48), Pt(44), Pt(40), Pt(36), Pt(32), Pt(28)]
 
 # ── Per-section slide styles ──────────────────────────────────────────────────
-# All positions/sizes in EMU (914400 EMU = 1 inch).
 # Font: None = inherited from layout. Font size in Pt.
 
 SLIDE_STYLES = {
@@ -54,8 +55,10 @@ SLIDE_STYLES = {
     # 獻詩 / Hymn lyrics: use 詩歌 layout placeholders
     "lyrics": {
         "layout":       "詩歌",
-        "title_ph_idx": 0,  # placeholder for song title
-        "body_ph_idx":  1,  # placeholder for lyrics lines
+        "title_ph_idx": 0,
+        "body_ph_idx":  1,
+        "box":          SONG_BODY_BOX,
+        "size_pt":      Pt(54),   # 詩歌 layout body default
         # fonts/colors all inherited from 詩歌 layout
     },
 
@@ -78,6 +81,9 @@ SLIDE_STYLES = {
         "title_ph_idx": 0,  # "報告： {section}"
         "body_ph_idx":  1,  # item text, align LEFT
         "align":        "left",
+        "box":          SONG_BODY_BOX,
+        "size_pt":      Pt(54),
+        "size_ladder":  ANNOUNCEMENT_SIZE_LADDER,
     },
 
     # 經文 title slide: three centered lines (label / reference / page hint)
@@ -104,13 +110,18 @@ SLIDE_STYLES = {
         "pos":      (Emu(4080063), Emu(0)),
         "size":     (Emu(4031873), Emu(707886)),
         "font":     "標楷體",
+        "size_pt":  Pt(40),
         "bold":     True,
         "align":    "center",
         "color":    CYAN_SOFT,
     },
     "scripture_verse_body": {
-        "pos":      (Emu(-22035), Emu(815926)),
-        "size":     (Emu(12537195), Emu(5909310)),
+        # The reference decks place this box at x=-0.024in with a width of
+        # 13.711in, which overhangs the 13.333in slide by 0.35in — enough to
+        # clip the last glyph of a full line. Clamped to the slide so wrapping
+        # happens where the text is still visible.
+        "pos":      (Emu(0), Emu(815926)),
+        "size":     (Emu(12192000), Emu(6042074)),
         "font":     "DFKai-SB",
         "size_pt":  Pt(54),
         "bold":     True,
@@ -126,7 +137,10 @@ SLIDE_STYLES = {
         "header_ph_idx": 0,
         "body_ph_idx":   1,
         "title_size_pt": Pt(80),
-        "spacer_text":   " " * 32,
+        # The reference decks open the body with an empty paragraph, which
+        # drops the title to the vertical centre of the box.
+        "lead_blank_line": True,
+        "spacer_text":   " " * 51,
         "spacer_font":   "DFKai-SB",
         "spacer_size_pt": Pt(50),
         "spacer_bold":   True,
@@ -142,11 +156,13 @@ SLIDE_STYLES = {
         "body_ph_idx":    1,
         "pos":            (Emu(0), Emu(-99152)),
         "size":           (Emu(12192000), Emu(6957152)),
+        "box":            (Emu(12192000), Emu(6957152)),
         "header_text":    "今日信息",
         "header_font":    "標楷體",
         "header_size_pt": Pt(44),
         "header_bold":    True,
         "header_color":   CYAN_SOFT,
         "points_align":   "left",
+        "size_pt":        Pt(54),   # points inherit the 詩歌 body size
     },
 }

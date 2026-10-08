@@ -343,6 +343,14 @@
         ⚠ 某些投影片無法直接讀取，將使用佔位符
       </div>
 
+      <div id="unused-warning" style="display:none; margin-top:1rem; padding:0.75rem; background:#2a1a1a; border-radius:6px; border-left:3px solid #ef4444; color:#fca5a5; font-size:0.82rem;">
+        <div style="font-weight:600; margin-bottom:0.3rem;">⚠ 以下上傳檔案沒有被使用：</div>
+        <div id="unused-list" style="font-family:ui-monospace, monospace; font-size:0.78rem;"></div>
+        <div style="margin-top:0.4rem; color:#94a3b8;">
+          若其中是講道投影片，請在上方「檔案對應」的「證道」欄位選取；否則請確認程序單是否漏列。
+        </div>
+      </div>
+
       <div style="margin-top:1rem; display:flex; gap:0.5rem; flex-wrap:wrap;">
         <button class="btn btn-success" id="gen-final-btn" onclick="generate()">
           🚀 產生 PPTX
@@ -408,6 +416,9 @@ async function uploadFiles(fileList) {
     renderFileList();
     toast(`上傳了 ${data.uploaded.length} 個檔案`, 'success');
     checkGenReady();
+  }
+  if (data.warning) {
+    toast(data.warning, 'error');
   }
 }
 
@@ -483,6 +494,7 @@ async function showPlan(useOverrides = false) {
     } else {
       currentPlan = data.plan || [];
       currentMatchItems = data.match_items || [];
+      renderUnused(data.unused_inputs || []);
       // Seed overrides from auto-match on first preview; keep user choices on re-apply
       if (!useOverrides) {
         currentOverrides = {};
@@ -532,6 +544,16 @@ function renderMatchItems(items) {
   }).join('');
 }
 
+function renderUnused(names) {
+  const box = document.getElementById('unused-warning');
+  if (!names.length) {
+    box.style.display = 'none';
+    return;
+  }
+  document.getElementById('unused-list').textContent = names.join('  ·  ');
+  box.style.display = 'block';
+}
+
 function onOverrideChange(e) {
   const id = e.target.dataset.itemId;
   currentOverrides[id] = e.target.value;
@@ -568,8 +590,11 @@ function renderPlan(plan) {
         <div class="scripture-row">
           <span>${item.testament || '新約'}</span>
           <span>第</span>
-          <input type="number" id="bible-page-input" placeholder="?" min="1" max="999">
+          <input type="number" id="bible-page-input" placeholder="?" min="1" max="999"
+                 value="${item.page ?? ''}">
           <span>頁</span>
+          ${item.page ? '<span style="color:#64748b; font-size:0.78rem;">（依過去紀錄自動填入，可修改）</span>'
+                      : '<span style="color:#fbbf24; font-size:0.78rem;">（未有紀錄，請填入）</span>'}
         </div>
       </div>`;
     }
@@ -593,6 +618,7 @@ function renderPlan(plan) {
 function closePlan() {
   document.getElementById('plan-panel').style.display = 'none';
   document.getElementById('plan-status-box').style.display = 'none';
+  document.getElementById('unused-warning').style.display = 'none';
   currentPlan = null;
   currentMatchItems = [];
   currentOverrides = {};

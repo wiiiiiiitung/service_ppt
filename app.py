@@ -1,48 +1,30 @@
 """Flask web app for Sunday worship PPT generator."""
 
-import json
+import logging
 import os
 import shutil
 import uuid
 
-from flask import (
-    Flask,
-    jsonify,
-    render_template,
-    request,
-    send_file,
-    session,
-)
+from flask import Flask, jsonify, render_template, request, send_file, session
+from pptx import Presentation
 
+import bible_pages
+import deck_sources
+from bible_fetcher import get_testament
+from file_converter import convert_directory, convert_legacy
 from pdf_parser import parse_agenda
 from ppt_builder import build_pptx
-from slide_planner import plan_slides, plan_match_items
-from slide_finder import find_slide
-from bible_fetcher import get_testament
-from file_converter import convert_legacy, convert_directory
+from slide_planner import plan_match_items, plan_slides, unused_inputs
+
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(24)
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-# Use /tmp for Vercel serverless (read-only filesystem), local uploads/ for development
-UPLOAD_DIR = os.path.join("/tmp", "uploads") if os.environ.get("VERCEL") else os.path.join(BASE_DIR, "uploads")
-# Local fixed intro template (first few pre-worship slides)
-_intro_candidate = os.path.join(BASE_DIR, "template", "intro.pptx")
-INTRO_PATH = _intro_candidate if os.path.exists(_intro_candidate) else None
-# Default template: latest example output
-_example_dir = os.path.join(BASE_DIR, "example")
-TEMPLATE_PATH = None
-if os.path.isdir(_example_dir):
-    for _sub in sorted(os.listdir(_example_dir), reverse=True):
-        _out = os.path.join(_example_dir, _sub, "output")
-        if os.path.isdir(_out):
-            for _f in os.listdir(_out):
-                if _f.endswith(".pptx"):
-                    TEMPLATE_PATH = os.path.join(_out, _f)
-                    break
-        if TEMPLATE_PATH:
-            break
+# Use /tmp for serverless (read-only filesystem), local uploads/ for development
+UPLOAD_DIR = (os.path.join("/tmp", "uploads") if os.environ.get("VERCEL")
+              else os.path.join(BASE_DIR, "uploads"))
 
 ALLOWED_EXTENSIONS = {".pdf", ".ppt", ".pptx", ".doc", ".docx"}
 
@@ -57,6 +39,126 @@ def _session_dir():
     d = os.path.join(UPLOAD_DIR, sid)
     os.makedirs(d, exist_ok=True)
     return d
+
+
+def _discover_input_files(upload_dir):
+    """Split uploaded files into the agenda PDF path and the rest (by name)."""
+    pdf_path = None
+    input_files = {}
+    for fname in sorted(os.listdir(upload_dir)):
+        fpath = os.path.join(upload_dir, fname)
+        if not os.path.isfile(fpath):
+            continue
+        ext = os.path.splitext(fname)[1].lower()
+        if ext == ".pdf":
+            pdf_path = fpath
+        elif ext in ALLOWED_EXTENSIONS:
+            input_files[fname] = fpath
+    return pdf_path, input_files
+
+
+def _error_response(e):
+    import traceback
+    logger.exception("Request failed")
+    return jsonify({"error": str(e), "detail": traceback.format_exc()}), 500
+
+
+def _build_plan_summary(slides_spec):
+    """Collapse a slide spec list into a per-section summary for the UI."""
+    plan_summary = []
+    state = {"section": None, "count": 0, "label": None}
+
+    def flush(source):
+        if state["section"] and state["count"]:
+            plan_summary.append({
+                "section": state["section"],
+                "label": state["label"] or state["section"],
+                "source": source,
+                "slides": state["count"],
+                "status": "ok",
+            })
+        state["section"] = None
+        state["count"] = 0
+        state["label"] = None
+
+    def run(section, source, label=None):
+        if state["section"] != section:
+            flush(source)
+            state["section"] = section
+            state["label"] = label
+        state["count"] += 1
+
+    for spec in slides_spec:
+        stype = spec["type"]
+
+        if stype == "copy_template":
+            run("fixed", "template", "固定投影片")
+
+        elif stype == "copy_external":
+            run("input", "input", "輸入檔案")
+
+        elif stype == "blank":
+            continue
+
+        elif stype == "anthem_lyrics":
+            run("anthem_lyrics", "docx", f"獻詩歌詞: {spec.get('title', '')}")
+
+        elif stype == "scripture_verses":
+            run("scripture_verses", "bible-api.com", f"經文: {spec.get('ref', '')}")
+
+        elif stype == "sermon_point":
+            run("sermon_points", "generated", "今日信息大綱")
+
+        else:
+            flush("template" if state["section"] == "fixed" else "input")
+
+            if stype == "hymn_placeholder":
+                plan_summary.append({
+                    "section": "hymn", "label": spec.get("label", "Hymn"),
+                    "source": "⚠ 找不到檔案 — 使用佔位符",
+                    "slides": 1, "status": "warning",
+                })
+
+            elif stype == "anthem_title":
+                plan_summary.append({
+                    "section": "anthem", "label": f"獻詩: {spec.get('title', '')}",
+                    "source": "docx or library", "slides": 1, "status": "ok",
+                })
+
+            elif stype == "scripture_title":
+                ref = spec.get("item", {}).get("title", "")
+                testament = get_testament(ref.split()[0]) if ref else "新約"
+                plan_summary.append({
+                    "section": "scripture", "label": ref,
+                    "source": "bible-api.com", "slides": 1, "status": "ok",
+                    "testament": testament, "page": spec.get("bible_page"),
+                })
+
+            elif stype == "sermon_title":
+                plan_summary.append({
+                    "section": "sermon", "label": f"今日信息: {spec.get('title', '')}",
+                    "source": "generated", "slides": 1, "status": "ok",
+                })
+
+            elif stype == "announcement":
+                plan_summary.append({
+                    "section": "announcement", "label": spec.get("section", "報告"),
+                    "source": "generated", "slides": 1, "status": "ok",
+                })
+
+    flush("template" if state["section"] == "fixed" else "input")
+    return plan_summary
+
+
+def _load_libraries(fixed_deck):
+    """Fixed deck first, then the past output decks, as Presentations."""
+    libraries = [fixed_deck]
+    for p in deck_sources.library_paths(exclude=[deck_sources.fixed_path()]):
+        try:
+            libraries.append(Presentation(p))
+        except Exception:
+            logger.exception("Failed to load library PPTX %s; skipping", p)
+    return libraries
 
 
 @app.route("/")
@@ -74,6 +176,7 @@ def upload_file():
 
     upload_dir = _session_dir()
     saved = []
+    unconverted = []
 
     for f in request.files.getlist("files"):
         name = f.filename
@@ -90,10 +193,19 @@ def upload_file():
                 os.remove(dest)
                 dest = new_path
                 name = os.path.basename(new_path)
+            else:
+                unconverted.append(name)
 
         saved.append({"name": name, "size": os.path.getsize(dest)})
 
-    return jsonify({"uploaded": saved})
+    body = {"uploaded": saved}
+    if unconverted:
+        body["warning"] = (
+            "無法轉換舊格式檔案（需要安裝 LibreOffice）："
+            + "、".join(unconverted)
+            + "。請在 PowerPoint 另存為 .pptx / .docx 後重新上傳。"
+        )
+    return jsonify(body)
 
 
 @app.route("/api/files", methods=["GET"])
@@ -101,13 +213,11 @@ def list_uploaded():
     """List uploaded files for this session."""
     upload_dir = _session_dir()
     files = []
-    for fname in os.listdir(upload_dir):
+    for fname in sorted(os.listdir(upload_dir)):
         fpath = os.path.join(upload_dir, fname)
-        files.append({
-            "name": fname,
-            "size": os.path.getsize(fpath),
-            "source": "local",
-        })
+        if os.path.isfile(fpath):
+            files.append({"name": fname, "size": os.path.getsize(fpath),
+                          "source": "local"})
     return jsonify({"files": files})
 
 
@@ -115,7 +225,7 @@ def list_uploaded():
 def delete_file(filename):
     """Remove an uploaded file."""
     upload_dir = _session_dir()
-    fpath = os.path.join(upload_dir, filename)
+    fpath = os.path.join(upload_dir, os.path.basename(filename))
     if os.path.exists(fpath):
         os.remove(fpath)
     return jsonify({"deleted": filename})
@@ -136,171 +246,39 @@ def clear_files():
 def plan():
     """Preview the slide plan for the worship service (without generating PPTX)."""
     upload_dir = _session_dir()
-
-    # Convert any leftover .ppt/.doc in the session dir (e.g. uploaded before
-    # this codepath existed, or from a session restored across deploys).
     convert_directory(upload_dir)
 
-    # Find the PDF
-    pdf_path = None
-    input_files = {}
-
-    for fname in os.listdir(upload_dir):
-        fpath = os.path.join(upload_dir, fname)
-        ext = os.path.splitext(fname)[1].lower()
-        if ext == ".pdf":
-            pdf_path = fpath
-        else:
-            input_files[fname] = fpath
-
+    pdf_path, input_files = _discover_input_files(upload_dir)
     if not pdf_path:
         return jsonify({"error": "No PDF agenda found. Please upload the agenda PDF."}), 400
 
-    if not TEMPLATE_PATH or not os.path.exists(TEMPLATE_PATH):
-        return jsonify({"error": "Template PPTX not found."}), 500
+    fixed_path = deck_sources.fixed_path()
+    if not fixed_path:
+        return jsonify({"error": "template/fixed.pptx not found."}), 500
 
     try:
-        from pptx import Presentation
-        template = Presentation(TEMPLATE_PATH)
-
-        # Load libraries
-        libraries = [template]
-        library_paths = []
-        if os.path.isdir(_example_dir):
-            for sub in sorted(os.listdir(_example_dir)):
-                out_dir = os.path.join(_example_dir, sub, "output")
-                if os.path.isdir(out_dir):
-                    for f in os.listdir(out_dir):
-                        if f.endswith(".pptx"):
-                            library_paths.append(os.path.join(out_dir, f))
-        for p in library_paths:
-            try:
-                libraries.append(Presentation(p))
-            except Exception:
-                pass
-
-        # Parse the agenda
+        fixed_deck = Presentation(fixed_path)
+        libraries = _load_libraries(fixed_deck)
         agenda = parse_agenda(pdf_path)
 
-        # Accept overrides from request body (optional) so the preview reflects
-        # the user's manual file picks for hymns/readings/anthems.
         overrides = None
         if request.is_json:
             overrides = (request.get_json(silent=True) or {}).get("overrides")
 
-        # Per-item match info for the UI to render file-picker dropdowns
         match_items = plan_match_items(agenda, input_files)
+        slides_spec = plan_slides(fixed_deck, libraries, agenda, input_files,
+                                  skip_intro=bool(deck_sources.intro_path()),
+                                  bible_page=None, overrides=overrides)
 
-        # Plan slides (no bible_page yet, user will fill it in)
-        slides_spec = plan_slides(template, libraries, agenda, input_files,
-                                  skip_intro=False, bible_page=None, overrides=overrides)
-
-        # Build a summary per section
-        plan_summary = []
-        current_section = None
-        current_count = 0
-        current_source = None
-
-        for spec in slides_spec:
-            stype = spec["type"]
-
-            # Track sections
-            if stype == "copy_template":
-                if current_section != "fixed":
-                    if current_section and current_count:
-                        plan_summary.append({
-                            "section": current_section,
-                            "label": current_source or current_section,
-                            "source": "template",
-                            "slides": current_count,
-                            "status": "ok"
-                        })
-                    current_section = "fixed"
-                    current_count = 0
-                current_count += 1
-
-            elif stype == "copy_external":
-                if current_section != "input":
-                    if current_section and current_count:
-                        plan_summary.append({
-                            "section": current_section,
-                            "label": current_source or current_section,
-                            "source": "input",
-                            "slides": current_count,
-                            "status": "ok"
-                        })
-                    current_section = "input"
-                    current_count = 0
-                current_count += 1
-
-            elif stype == "blank":
-                pass
-
-            elif stype == "hymn_placeholder":
-                plan_summary.append({
-                    "section": "hymn",
-                    "label": spec.get("label", "Hymn"),
-                    "source": "⚠ not found — placeholder",
-                    "slides": 1,
-                    "status": "warning"
-                })
-
-            elif stype == "anthem_title":
-                plan_summary.append({
-                    "section": "anthem",
-                    "label": f"獻詩: {spec.get('title', '')}",
-                    "source": "docx or library",
-                    "slides": 1,
-                    "status": "ok"
-                })
-
-            elif stype == "scripture_title":
-                item = spec.get("item", {})
-                ref = item.get("title", "")
-                testament = get_testament(ref.split()[0]) if ref else "新約"
-                plan_summary.append({
-                    "section": "scripture",
-                    "label": ref,
-                    "source": "bible-api.com or library",
-                    "slides": 1,
-                    "status": "ok",
-                    "testament": testament,
-                    "page": spec.get("bible_page")
-                })
-
-            elif stype == "sermon_title":
-                plan_summary.append({
-                    "section": "sermon",
-                    "label": f"今日信息: {spec.get('title', '')}",
-                    "source": "generated",
-                    "slides": 1,
-                    "status": "ok"
-                })
-
-            elif stype == "announcement":
-                plan_summary.append({
-                    "section": "announcement",
-                    "label": spec.get("section", "報告"),
-                    "source": "generated",
-                    "slides": 1,
-                    "status": "ok"
-                })
-
-        # Append final section if one is being tracked
-        if current_section and current_count:
-            plan_summary.append({
-                "section": current_section,
-                "label": current_source or current_section,
-                "source": "template" if current_section == "fixed" else "input",
-                "slides": current_count,
-                "status": "ok"
-            })
-
-        return jsonify({"plan": plan_summary, "match_items": match_items})
+        return jsonify({
+            "plan": _build_plan_summary(slides_spec),
+            "match_items": match_items,
+            "unused_inputs": unused_inputs(slides_spec, input_files),
+            "total_slides": len(slides_spec),
+        })
 
     except Exception as e:
-        import traceback
-        return jsonify({"error": str(e), "detail": traceback.format_exc()}), 500
+        return _error_response(e)
 
 
 # ── Generate ───────────────────────────────────────────────────────────────────
@@ -309,68 +287,57 @@ def plan():
 def generate():
     """Parse the PDF and generate the worship PPTX."""
     upload_dir = _session_dir()
-
-    # Convert any leftover .ppt/.doc in the session dir
     convert_directory(upload_dir)
 
-    # Find the PDF
-    pdf_path = None
-    input_files = {}
-
-    for fname in os.listdir(upload_dir):
-        fpath = os.path.join(upload_dir, fname)
-        ext = os.path.splitext(fname)[1].lower()
-        if ext == ".pdf":
-            pdf_path = fpath
-        else:
-            input_files[fname] = fpath
-
+    pdf_path, input_files = _discover_input_files(upload_dir)
     if not pdf_path:
         return jsonify({"error": "No PDF agenda found. Please upload the agenda PDF."}), 400
 
-    if not TEMPLATE_PATH or not os.path.exists(TEMPLATE_PATH):
-        return jsonify({"error": "Template PPTX not found. Place a completed PPTX in example/<date>/output/"}), 500
+    fixed_path = deck_sources.fixed_path()
+    if not fixed_path:
+        return jsonify({"error": "template/fixed.pptx not found."}), 500
 
     try:
-        # Parse the agenda PDF
         agenda = parse_agenda(pdf_path)
 
-        # Generate output filename from date
-        date_str = agenda.get("date", "").replace("/", "")
-        out_name = f"Sunday Worship {date_str}.pptx"
+        # Name the file the way the archive does: YYYYMMDD, not MMDDYYYY.
+        date_str = agenda.get("date", "")
+        parts = date_str.split("/")
+        stamp = f"{parts[2]}{parts[0]}{parts[1]}" if len(parts) == 3 else date_str.replace("/", "")
+        out_name = f"Sunday Worship {stamp}.pptx" if stamp else "Sunday Worship.pptx"
         out_path = os.path.join(upload_dir, out_name)
 
-        # Collect all example output PPTX files as slide library
-        library_paths = []
-        if os.path.isdir(_example_dir):
-            for sub in sorted(os.listdir(_example_dir)):
-                out_dir = os.path.join(_example_dir, sub, "output")
-                if os.path.isdir(out_dir):
-                    for f in os.listdir(out_dir):
-                        if f.endswith(".pptx"):
-                            library_paths.append(os.path.join(out_dir, f))
-
-        # Get bible page number + per-item file overrides from request (optional)
         body = request.get_json(silent=True) or {}
         bible_page = body.get("bible_page")
         overrides = body.get("overrides")
 
-        # Build the PPTX
-        build_pptx(TEMPLATE_PATH, agenda, input_files, out_path,
-                   library_paths=library_paths, intro_path=INTRO_PATH,
-                   bible_page=bible_page, overrides=overrides)
+        report = build_pptx(
+            fixed_path, agenda, input_files, out_path,
+            library_paths=deck_sources.library_paths(exclude=[fixed_path]),
+            intro_path=deck_sources.intro_path(),
+            bible_page=bible_page, overrides=overrides,
+        )
 
-        # Store output path in session
+        # Keep the page number the operator typed, so next time this passage
+        # comes round it is already filled in.
+        if bible_page:
+            for item in agenda.get("worship_order", []):
+                if item.get("type") == "scripture":
+                    bible_pages.remember(item.get("title", ""), bible_page)
+                    break
+
         session["output_file"] = out_path
         session["output_name"] = out_name
 
         return jsonify({
             "success": True,
             "filename": out_name,
+            "unused_inputs": report["unused_inputs"],
             "agenda_summary": {
                 "date": agenda.get("date"),
                 "worship_order": [
-                    {"type": i.get("type"), "title": i.get("title"), "number": i.get("number")}
+                    {"type": i.get("type"), "title": i.get("title"),
+                     "number": i.get("number")}
                     for i in agenda.get("worship_order", [])
                 ],
                 "sermon_title": agenda.get("sermon_outline", {}).get("title"),
@@ -379,8 +346,7 @@ def generate():
         })
 
     except Exception as e:
-        import traceback
-        return jsonify({"error": str(e), "detail": traceback.format_exc()}), 500
+        return _error_response(e)
 
 
 @app.route("/api/download")
@@ -399,6 +365,5 @@ def download():
 
 
 if __name__ == "__main__":
-    import os
     port = int(os.environ.get("PORT", 5001))
     app.run(debug=False, host="0.0.0.0", port=port)
