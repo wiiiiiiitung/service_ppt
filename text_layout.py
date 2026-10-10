@@ -9,13 +9,21 @@ slide or wraps it early, so the arithmetic lives in one place.
 
 Calibration note
 ----------------
-`DEFAULT_LINE_HEIGHT` is measured, not assumed. Rendering both the generated
-and the hand-finished reference decks through LibreOffice and reading back the
-text extents gives ~1.02in per line for 54pt 標楷體 — a factor of ~1.36, not
-the ~1.2 a Latin face would use. The CJK faces this deck uses (標楷體 /
-DFKai-SB) have unusually deep ascent+descent. With 1.2 the 詩歌 body box looks
-like it holds 7 lines; it actually holds 6, which is exactly the off-by-one
-that pushed the last lyric line off the slide.
+Both constants are measured off rendered PDFs, not assumed.
+
+`LINE_PITCH` is 1.2 — plain single spacing. Measuring consecutive baselines in
+a rendered deck gives exactly 60.0pt for 50pt text in a plain text box.
+
+`PARA_SPACING` is the *extra* gap between paragraphs, 0.2 of the font size,
+and it applies only where the slide master's `spcBef` does: body placeholders
+on the 詩歌 master. The same measurement on a 詩歌 placeholder gives 70.0pt
+for 50pt text — 1.2 pitch plus 0.2 spacing. A plain text box gets no spacing
+at all.
+
+Keeping them separate matters. Rolling both into one 1.36 factor and *also*
+adding paragraph spacing double-counted the gap and over-predicted the height
+of anything with several paragraphs by ~30%, which made the autofit pass
+shrink slides that fit perfectly well.
 """
 
 import math
@@ -24,15 +32,26 @@ EMU_PER_PT = 12700
 EMU_PER_IN = 914400
 
 # Measured: see the calibration note above.
-DEFAULT_LINE_HEIGHT = 1.36
+LINE_PITCH = 1.2
+# Extra gap before each paragraph after the first, as a multiple of the font
+# size. The 詩歌 master sets spcBef to 20% for body placeholders; a plain text
+# box inherits none, so pass 0 for those.
+PARA_SPACING = 0.2
+
+# Backwards-compatible alias for the old single bundled factor.
+DEFAULT_LINE_HEIGHT = LINE_PITCH
 
 # Default text-box insets from the slide master (lIns/rIns 0.1in, tIns/bIns 0.05in).
 DEFAULT_INSET = (91440, 45720)
 
-# Usable width is shaved by this much before wrapping. A CJK glyph's advance is
-# nominally 1em, but the real advance in 標楷體 / DFKai-SB runs slightly over,
-# so a line computed to land exactly on the box edge rendered ~5pt past it.
-WIDTH_SAFETY = 0.97
+# Usable width is shaved by this much (in em) before wrapping. A CJK glyph's
+# advance is nominally 1em but runs slightly over in 標楷體 / DFKai-SB, so a
+# line computed to land exactly on the box edge rendered ~5pt past it. An
+# absolute margin rather than a percentage: a percentage scaled with the box
+# and cost a whole character on the wide scripture box, wrapping a line earlier
+# than the reference decks do.
+WIDTH_MARGIN_EM = 0.3
+WIDTH_SAFETY = 0.97  # retained for callers that still scale a ratio
 
 
 def _is_wide(ch):
@@ -63,15 +82,22 @@ def display_width(text):
     return sum(1.0 if _is_wide(ch) else 0.5 for ch in text)
 
 
-def capacity(box, size_pt, inset=DEFAULT_INSET, line_height=DEFAULT_LINE_HEIGHT):
+def capacity(box, size_pt, inset=DEFAULT_INSET, line_pitch=LINE_PITCH,
+             para_spacing=PARA_SPACING):
     """
     How much text a box holds.
+
+    `max_lines` is worked out for the worst case of one line per paragraph, so
+    it accounts for the paragraph gap: N lines occupy
+    `N * line_pitch + (N - 1) * para_spacing` ems. Pass `para_spacing=0` for a
+    plain text box, which inherits no `spcBef`.
 
     Args:
         box: (width_emu, height_emu) of the text box
         size_pt: font size, as a python-pptx Length (Pt) or raw EMU int
         inset: (horizontal, vertical) inset per side, in EMU
-        line_height: multiple of the font size one line occupies
+        line_pitch: baseline-to-baseline distance, in ems
+        para_spacing: extra gap before each paragraph after the first, in ems
 
     Returns:
         (cols, max_lines) — cols is the usable width in em units, so compare it
@@ -83,8 +109,16 @@ def capacity(box, size_pt, inset=DEFAULT_INSET, line_height=DEFAULT_LINE_HEIGHT)
         return (0, 0)
     usable_w = max(0, width - 2 * int(inset[0]))
     usable_h = max(0, height - 2 * int(inset[1]))
-    cols = (usable_w / em) * WIDTH_SAFETY
-    max_lines = int(usable_h // (em * line_height))
+
+    cols = max(0.0, usable_w / em - WIDTH_MARGIN_EM)
+
+    budget = usable_h / em
+    max_lines = 0
+    while True:
+        n = max_lines + 1
+        if n * line_pitch + (n - 1) * para_spacing > budget:
+            break
+        max_lines = n
     return (cols, max(1, max_lines))
 
 
@@ -126,6 +160,15 @@ def wrap_text(text, cols, indent=""):
     return lines
 
 
+# Kinsoku shori: characters that may not begin a line. A line that starts with
+# a comma or a closing bracket reads as a typographic error, and the worst case
+# — a line holding nothing but "」" — happened regularly.
+NO_LINE_START = "，。、；：！？）」』】》〉·…ーヽヾ々,.;:!?)]}%‰°″′’”"
+# Characters that may not end a line: an opening bracket belongs with the text
+# it opens.
+NO_LINE_END = "（「『【《〈([{‘“"
+
+
 def _cut_point(text, budget):
     """Index to break `text` at so the first piece is at most `budget` em wide."""
     width = 0.0
@@ -137,18 +180,44 @@ def _cut_point(text, budget):
             break
     hard = max(1, hard)
 
-    # Prefer a clause boundary within the last ~20% of the line.
+    # Prefer a clause boundary within the last ~20% of the line: breaking just
+    # after the punctuation keeps it on the line it belongs to.
     window = max(1, int(hard * 0.2))
     for i in range(hard, hard - window, -1):
         if text[i - 1] in "，、；。！？,;.!?":
-            return i
+            nxt = text[i] if i < len(text) else ""
+            if not nxt or nxt not in NO_LINE_START:
+                return i
 
     # Otherwise avoid splitting a Latin/digit run.
     i = hard
     while i > 1 and not _is_wide(text[i - 1]) and not text[i - 1].isspace() \
             and not _is_wide(text[i]) and not text[i].isspace():
         i -= 1
-    return i if i > 1 else hard
+    cut = i if i > 1 else hard
+    return _apply_kinsoku(text, cut, hard)
+
+
+def _apply_kinsoku(text, cut, hard):
+    """
+    Nudge a break point so it doesn't orphan punctuation.
+
+    Pulls the break earlier while the next line would start with a character
+    that may not begin one, or the current line would end with an opening
+    bracket. Gives up rather than shrinking the line to nothing.
+    """
+    floor = max(1, hard - 4)
+    while cut > floor:
+        nxt = text[cut] if cut < len(text) else ""
+        prev = text[cut - 1]
+        if nxt and nxt in NO_LINE_START:
+            cut -= 1
+            continue
+        if prev in NO_LINE_END:
+            cut -= 1
+            continue
+        break
+    return cut
 
 
 def pack_lines(lines, max_lines):

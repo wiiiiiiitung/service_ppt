@@ -320,15 +320,32 @@ def _extract_announcements(text):
 _ITEM_PREFIX_RE = re.compile(r"^(\d+[.．])\s*")
 
 
+# The bulletin writes Chinese clauses with an ASCII comma, so a comma followed
+# by Chinese starts a new clause and takes no space. The semicolon is left
+# alone: it separates Latin fields here ("密碼 626954; 電話 646-558-8656"), and
+# the hand-adjusted decks keep its space.
+_CLAUSE_COMMA = r"[,，、]"
+# What a clause can start with: Chinese, or an opening bracket introducing it.
+_CLAUSE_HEAD = r"(?:[　-〿㐀-䶿一-鿿豈-﫿＀-￯]|[（(「『【《〈])"
+
+
 def _strip_cjk_spacing(text):
     """
-    Collapse whitespace sitting *between two CJK characters*.
+    Collapse whitespace that sits inside a Chinese sentence.
 
     The bulletin is justified, so pdfplumber reports spurious spaces at every
-    line-wrap point in Chinese text. Removing those is right; removing a space
-    that borders Latin text is not — "會號 994 2970 4298" became "會號994 2970
-    4298" and "線上: https://…" lost its separator. The reference decks keep
-    the CJK↔Latin spaces, so only the CJK↔CJK ones are collapsed.
+    line-wrap point. Two cases are removed:
+
+    * between two CJK characters
+    * after a comma that introduces Chinese — the bulletin writes Chinese
+      clauses with an ASCII comma, so "信箱, 可填好", "11/15, 積極會員" and
+      "1559, 微信" all lose the space the way "信箱，可填好" would
+
+    What the comma *follows* doesn't matter, only what it introduces. That
+    keeps "Apt.3F, Flushing" and "密碼 626954; 電話 646-558-8656" intact: the
+    first introduces Latin, and the semicolon isn't a Chinese clause mark at
+    all. Spaces bordering Latin text survive generally — "會號 994 2970 4298",
+    "線上: https://…", "下午 3 點整" all read correctly with them.
     """
     prefix = ""
     m = _ITEM_PREFIX_RE.match(text)
@@ -336,4 +353,5 @@ def _strip_cjk_spacing(text):
         prefix = m.group(1) + " "
         text = text[m.end():]
     text = re.sub(rf"(?<={_CJK_RE})\s+(?={_CJK_RE})", "", text)
+    text = re.sub(rf"({_CLAUSE_COMMA})\s+(?={_CLAUSE_HEAD})", r"\1", text)
     return prefix + text.strip()
