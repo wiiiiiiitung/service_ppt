@@ -17,13 +17,21 @@ Three PPTX assets, with distinct roles (`deck_sources.py`):
 | --- | --- |
 | `template/intro.pptx` | The fixed pre-worship slides. The output deck *starts as a copy of this file*, so it also supplies the slide masters and the `詩歌` / `Blank` layouts every generated slide uses. |
 | `template/fixed.pptx` | Searched by text marker for every recurring slide: 宣召, 祈禱, 主禱文, 信仰告白, 奉獻, 聖餐, 頌榮, 祝禱, 默禱, website. |
-| `example/*/output/*.pptx` | Library, searched for hymn / reading / anthem slides when the week's own input file is missing. |
+| `example/*/output/*.pptx` | Optional library, searched for hymn / reading / anthem slides when the week's own input file is missing. **Empty by default** — see below. |
 
 `template/fixed.pptx` is pinned deliberately. It used to be whichever past
 output deck `os.listdir` returned first, which meant editing an old week's
 deck silently changed this week's output. If you replace it, run the
 regression harness — it asserts every marker in `slide_finder.SLIDE_MARKERS`
 still resolves to exactly one slide.
+
+The library ships empty on purpose. Across eleven weeks of real agendas it was
+never once consulted — every hymn, reading and anthem came from that week's own
+upload — so the decks that used to sit in `example/` were 7MB that only ever
+got bundled into the deploy. The lookup still works if you drop past output
+decks into `example/<date>/output/`; with none there, a missing input produces a
+clearly-marked placeholder slide instead, which is the more honest outcome
+anyway.
 
 Pipeline: `pdf_parser` → `slide_planner` (agenda + files → ordered slide specs)
 → `ppt_builder` (dispatch) → `slide_copier` (copy existing slides) or
@@ -98,8 +106,20 @@ curated by hand and is reproduced exactly.
 
 ## Regression harness
 
-Eleven weeks of real input/output pairs live in `example_2/`. The harness
-generates each week and compares it to the hand-finished deck:
+Eleven weeks of real input/output pairs drive the harness. **They are not in
+the repo** — ~31MB of PPTX and PDF that the app never reads at runtime and
+Vercel would bundle into the function on every deploy. Keep them beside the
+code as `example_2/<date>/`, or anywhere you like:
+
+```
+SERVICE_PPT_FIXTURES=~/service-ppt-fixtures python3 tools/regress.py
+```
+
+Each `<date>/` folder holds that week's inputs plus the hand-finished
+`Sunday Worship ....pptx` to compare against; adding a new week is just
+dropping in a folder. Run with no fixtures present and the harness says so
+rather than silently reporting nothing. The harness generates each week and
+compares it to the hand-finished deck:
 
 ```
 python3 tools/regress.py                  # structural diff + marker check
@@ -162,6 +182,14 @@ turned 「你的上帝」 into 「你上帝」. Nothing in the app can detect th
 is LibreOffice's fidelity, not ours. If a week's text is critical, a manual
 re-save is still marginally safer; for routine use the trade against re-saving
 every file by hand is yours to make.
+
+## Deployment size
+
+`.vercelignore` keeps the serverless bundle to the app itself — fixtures,
+tooling and the Dockerfile stay out, taking the upload from ~38MB to ~3MB.
+Anything the app reads at runtime must *not* be listed there: `template/`
+holds `intro.pptx` (the output deck's base, and the source of its slide
+masters) and `fixed.pptx` (every recurring service slide).
 
 ## Deployment
 

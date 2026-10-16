@@ -5,3 +5,11 @@ __pycache__/
 *.pyc
 .DS_Store
 ~$*
+
+# Worked examples and regression fixtures.
+# Kept on disk, out of the repo: ~35MB of PPTX/PDF that nothing needs at
+# runtime (example/ was a hymn-slide fallback library that 11 weeks of real
+# agendas never once hit) and that Vercel would bundle into the function on
+# every deploy. tools/regress.py still reads example_2/ when it is present.
+example/
+example_2/

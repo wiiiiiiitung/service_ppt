@@ -233,6 +233,21 @@ def main():
     print()
 
     targets = args.week or weeks()
+    if not targets:
+        from fixtures import FIXTURE_DIR
+        print(f"No fixtures found in {FIXTURE_DIR}")
+        print()
+        print("The week folders are kept out of the repo — they are ~31MB of PPTX")
+        print("and PDF that the app never reads at runtime. Put them back beside")
+        print("the code as example_2/<date>/, or point SERVICE_PPT_FIXTURES at")
+        print("wherever you keep them:")
+        print()
+        print("    SERVICE_PPT_FIXTURES=~/service-ppt-fixtures python3 tools/regress.py")
+        print()
+        print("Each <date>/ folder holds that week's input files plus the")
+        print("hand-finished 'Sunday Worship ....pptx' to compare against.")
+        return 1
+
     results = {}
 
     hdr = f"{'week':10} {'ref':>4} {'gen':>4} {'sim':>6} {'ref-only':>9} {'gen-only':>9}"
