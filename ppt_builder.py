@@ -81,10 +81,9 @@ def _add_slide(out_prs, fixed_deck, spec, agenda):
         prs = spec.get("prs", fixed_deck)
         index = spec.get("index")
         if index is not None:
-            new_slide = copy_slide(out_prs, prs, index)
-            if new_slide is not None:
-                strip_trailing_empty_paragraphs(new_slide)
-                shrink_overflowing_text(new_slide)
+            # Copied verbatim: the fixed deck is curated by hand, so its
+            # slides are reproduced exactly rather than re-measured.
+            copy_slide(out_prs, prs, index)
 
     elif stype == "copy_external":
         prs = spec.get("prs")

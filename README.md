@@ -49,6 +49,53 @@ Multi-line text is written with `styles.write_lines`, which emits real
 `<a:br/>` elements. A literal `\n` assigned through `run.text` lands inside
 `<a:t>`, where OOXML collapses it — PowerPoint renders no break at all.
 
+## Typography rules
+
+Three rules the generated text follows, all derived from the hand-adjusted
+reference decks:
+
+**Verse numbers align.** Continuation lines are indented to clear the verse
+number, and the number field is padded to the width of the widest number *on
+that slide*, so a slide holding verses 9 and 10 reads
+
+```
+9.  因為我在人的權下，        not    9. 因為我在人的權下，
+    下；對這個說                        下；對這個說
+10. 耶穌聽見就希奇                  10.耶穌聽見就希奇
+```
+
+Grouping uses the widest number in the whole passage, then each slide is
+re-wrapped against its own — which can only shorten lines, never overflow.
+
+**No orphaned punctuation** (`text_layout.NO_LINE_START` / `NO_LINE_END`). A
+line never begins with a comma, full stop or closing bracket, and never ends
+with an opening one. Without this, a verse could end with a line holding
+nothing but `」`.
+
+**Chinese clauses lose their space.** The bulletin writes Chinese clauses with
+an ASCII comma, so `信箱, 可填好`, `11/15, 積極會員` and `1559, 微信` all lose
+the space. What the comma follows doesn't matter, only what it introduces —
+which keeps `Apt.3F, Flushing` and `密碼 626954; 電話 646-558-8656` intact.
+
+## Line metrics
+
+`LINE_PITCH` is 1.2 and `PARA_SPACING` is 0.2, both measured off rendered PDFs:
+consecutive baselines are exactly 60.0pt for 50pt text in a plain text box, and
+70.0pt in a 詩歌 body placeholder, which adds the master's 20% `spcBef`. Keeping
+them separate matters — rolling both into one 1.36 factor *and* adding
+paragraph spacing double-counted the gap, over-predicted multi-paragraph
+heights by ~30%, and made the autofit pass shrink 宣召 from 66pt to 55pt and
+信仰告白 from 50pt to 33pt.
+
+`autofit.TOP_LEADING` covers a separate effect: a body placeholder inheriting
+the 詩歌 master renders its first line about a full line below the top of the
+box, so a 6-line body whose text is 438pt tall starts 59pt down a 455pt box and
+runs off the slide even though the text alone fits. Plain text boxes have no
+such offset.
+
+Slides copied from `template/fixed.pptx` are never re-measured — that deck is
+curated by hand and is reproduced exactly.
+
 ## Regression harness
 
 Eleven weeks of real input/output pairs live in `example_2/`. The harness
@@ -72,8 +119,8 @@ Three checks, because they catch different failures:
   because some overshoot is inherent to the design.
 - **markers** — every fixed-slide marker resolves to exactly one slide.
 
-Current state: 0 slides with off-slide text, against 40 in the hand-finished
-reference decks.
+Current state across 11 weeks: 0 slides with off-slide text, against 45 in the
+hand-finished reference decks; mean text similarity 0.876.
 
 Reading the structural diff: a difference is not automatically a defect. The
 references contain hand omissions the generator correctly does not reproduce —

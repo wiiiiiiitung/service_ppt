@@ -308,11 +308,22 @@ def _get_scripture_slides(item, bible_page=None):
         return slides
 
     style = SLIDE_STYLES["scripture_verse_body"]
-    cols, max_lines = capacity(style["size"], style["size_pt"])
+    # A plain text box, so no paragraph spacing to budget for.
+    cols, max_lines = capacity(style["size"], style["size_pt"], para_spacing=0)
 
     for group in _group_verses(verses, cols, max_lines):
+        # Re-wrap each slide's verses against that slide's own number width, so
+        # the text of every verse on it starts in the same column.
+        width = _prefix_width(group)
+        for v in group:
+            v["lines"] = _verse_lines(v, cols, width)
         slides.append({"type": "scripture_verses", "ref": ref, "verses": group})
     return slides
+
+
+def _prefix_width(verses):
+    """Width of the verse-number field for a slide: the longest "12." on it."""
+    return max(len(f"{v['verse']}.") for v in verses) if verses else 2
 
 
 def _group_verses(verses, cols, max_lines):
@@ -321,33 +332,46 @@ def _group_verses(verses, cols, max_lines):
 
     Each verse is laid out as "25.<text>" with continuation lines indented to
     clear the number, so the line count is computed from the formatted text,
-    not the raw verse. Each verse after the first also costs ~0.2 of a line in
-    paragraph spacing (the master sets spcBef to 20%).
+    not the raw verse. Grouping uses the widest number in the whole passage;
+    the caller then re-wraps each slide against its own widest number, which
+    can only shorten things.
     """
+    width = _prefix_width(verses)
     groups = []
     current = []
-    current_cost = 0.0
+    current_lines = 0
 
     for v in verses:
-        lines = _verse_lines(v, cols)
-        cost = len(lines) + (0.2 if current else 0.0)
-        if current and current_cost + cost > max_lines:
+        lines = _verse_lines(v, cols, width)
+        if current and current_lines + len(lines) > max_lines:
             groups.append(current)
             current = []
-            current_cost = 0.0
-            cost = len(lines)
+            current_lines = 0
         current.append(dict(v, lines=lines))
-        current_cost += cost
+        current_lines += len(lines)
 
     if current:
         groups.append(current)
     return groups
 
 
-def _verse_lines(verse, cols):
-    """Wrapped lines for one verse, with continuation lines indented."""
+def _verse_lines(verse, cols, width=None):
+    """
+    Wrapped lines for one verse, continuation lines indented to clear the
+    number.
+
+    The number field is padded to `width` so every verse on a slide starts its
+    text in the same column — otherwise a slide holding verses 9 and 10 steps
+    the single-digit verse one character left of the rest:
+
+        9.  因為我在人的權下，       9. 因為我在人的權下，
+            下；對這個說             instead of     下；對這個說
+        10. 耶穌聽見就希奇           10.耶穌聽見就希奇
+    """
     prefix = f"{verse['verse']}."
-    indent = " " * (len(prefix) + 1)
+    if width:
+        prefix = prefix.ljust(width)
+    indent = " " * len(prefix)
     return wrap_text(prefix + verse["text"], cols, indent=indent)
 
 

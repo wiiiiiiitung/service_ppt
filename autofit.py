@@ -18,6 +18,12 @@ Measuring in "lines" only works if every line is the same size, and in these
 source decks they are not — a hymn body often mixes 54pt lyric lines with 32pt
 romanisation. So each paragraph is measured at its own effective size and the
 heights are summed, which is what the renderer actually does.
+
+Only slides copied from a week's *input* decks are measured. The curated fixed
+deck is left exactly as the operator maintains it: its slides were being
+shrunk — 宣召 from 66pt to 55pt, 信仰告白 from 50pt to 33pt — because the
+height model over-predicted, and even with that fixed, second-guessing a deck
+the operator controls is not this pass's job.
 """
 
 import logging
@@ -26,7 +32,8 @@ from pptx.oxml.ns import qn
 from pptx.util import Pt
 
 from slide_copier import placeholder_idx
-from text_layout import DEFAULT_INSET, DEFAULT_LINE_HEIGHT, WIDTH_SAFETY, estimate_lines
+from text_layout import (DEFAULT_INSET, LINE_PITCH, PARA_SPACING,
+                         WIDTH_MARGIN_EM, estimate_lines)
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +42,22 @@ logger = logging.getLogger(__name__)
 MIN_SCALE = 0.62
 # Steps to try, so sizes stay on tidy values rather than arbitrary fractions.
 SCALE_STEPS = (0.92, 0.84, 0.78, 0.72, 0.66, MIN_SCALE)
-# The master sets spcBef to 20% of the line for body paragraphs.
-PARA_SPACING = 0.2
-# Copied shapes often inherit the master's hanging-indent bullet, which eats
-# horizontal room the box geometry doesn't show. Allow for it.
-COPIED_WIDTH_SAFETY = WIDTH_SAFETY * 0.95
+# A body placeholder that inherits the 詩歌 master's body style renders its
+# first line about a full line below the top of the box — the master's spcBef
+# plus a full leading. Measured: a 6-line 54pt body whose text is 438pt tall
+# starts 59pt (1.09em) down a 455pt box and so runs 30pt off the slide, even
+# though the text alone fits. A plain text box gets no such offset: 信仰告白
+# spans 5.6-537.1pt in a 0-540pt box. Budget for it, or those slides escape
+# shrinking and lose their last line.
+TOP_LEADING = 1.0
+
+# Copied shapes often can't be matched to a destination placeholder, so they
+# inherit the master's body style — including its hanging-indent bullet
+# (marL 342900 EMU, exactly 0.5em at 54pt) and the bullet glyph itself. None of
+# that shows in the box geometry, so allow for it on top of the usual margin.
+# Under-allowing here means a line is thought to fit when it actually wraps,
+# and the slide escapes shrinking and overflows by about half a line.
+COPIED_WIDTH_MARGIN_EM = WIDTH_MARGIN_EM + 1.0
 
 
 def strip_trailing_empty_paragraphs(slide):
@@ -139,21 +157,40 @@ def _needed_height(shape, sizes, usable_w):
     Rendered height of a shape's text, in EMU.
 
     Each paragraph is wrapped at its own size, so the columns available differ
-    per paragraph; a 32pt line fits far more characters than a 54pt one.
+    per paragraph; a 32pt line fits far more characters than a 54pt one. Lines
+    are spaced by LINE_PITCH, and a paragraph gap is added only where the
+    master actually applies one — see `_para_spacing`.
     """
+    spacing = _para_spacing(shape)
     total = 0.0
+    if spacing:
+        first = next((int(x) for x in sizes if x), 0)
+        total += first * TOP_LEADING
     for i, (p, size) in enumerate(zip(shape.text_frame.paragraphs, sizes)):
         em = int(size) if size else 0
         if em <= 0:
             continue
         # python-pptx reports an <a:br> as \x0b; each is its own rendered line.
         text = p.text.replace("\x0b", "\n")
-        cols = (usable_w / em) * COPIED_WIDTH_SAFETY
+        cols = max(0.0, usable_w / em - COPIED_WIDTH_MARGIN_EM)
         lines = 1 if not text.strip() else estimate_lines(text, cols)
-        total += lines * em * DEFAULT_LINE_HEIGHT
+        total += lines * em * LINE_PITCH
         if i:
-            total += em * PARA_SPACING
+            total += em * spacing
     return total
+
+
+def _para_spacing(shape):
+    """
+    Extra gap before each paragraph, as a multiple of the font size.
+
+    The 詩歌 master sets `spcBef` to 20% on its body style, so a body
+    placeholder gets it. Its title style sets 0%, and a plain text box follows
+    `otherStyle` with none — measured as exactly 1.2x pitch in a rendered deck,
+    against 1.4x for a body placeholder.
+    """
+    ph_idx = placeholder_idx(shape)
+    return PARA_SPACING if ph_idx not in (None, 0) else 0.0
 
 
 def _paragraph_sizes(shape, default):
