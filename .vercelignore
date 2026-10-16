@@ -1,0 +1,11 @@
+# Keep the serverless bundle to the app itself.
+#
+# Required at runtime and therefore NOT listed here:
+#   template/   intro.pptx supplies the masters and the output deck's base;
+#               fixed.pptx supplies every recurring service slide.
+example/
+example_2/
+tools/
+.regress/
+Dockerfile
+README.md

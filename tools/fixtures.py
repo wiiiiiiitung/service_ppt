@@ -1,9 +1,14 @@
 """
 Shared fixture plumbing for the regression harness.
 
-A fixture is one `example_2/<date>/` folder holding the week's input files
-(agenda PDF, hymn/reading PPTXs, anthem DOCX) alongside the hand-finished
+A fixture is one `<date>/` folder holding the week's input files (agenda PDF,
+hymn/reading PPTXs, anthem DOCX) alongside the hand-finished
 `Sunday Worship ....pptx` reference deck that the generator should reproduce.
+
+The fixtures are deliberately not in the repo — they are ~31MB of PPTX and PDF
+that nothing needs at runtime, and Vercel would bundle them into the serverless
+function on every deploy. They live in `example_2/` beside the code, or
+wherever `SERVICE_PPT_FIXTURES` points.
 """
 
 import glob
@@ -11,7 +16,7 @@ import os
 import shutil
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-FIXTURE_DIR = os.path.join(BASE_DIR, "example_2")
+FIXTURE_DIR = os.environ.get("SERVICE_PPT_FIXTURES") or os.path.join(BASE_DIR, "example_2")
 LEGACY_EXTS = (".ppt", ".doc")
 MODERN_EXTS = (".pptx", ".docx")
 
